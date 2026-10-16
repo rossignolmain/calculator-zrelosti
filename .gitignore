@@ -1,0 +1,7 @@
+# Build outputs and local checks
+*.exe
+*.dll
+*.pdb
+build/
+verification*/
+Данные/
