@@ -26,6 +26,7 @@ namespace MaturityApp
         public string AssessorPosition = "", ApproverName = "", ApproverPosition = "", DocumentNumber = "";
         public string Date = DateTime.Today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         public int Category = 1;
+        public SystemPassport Passport = null;
         public DirectionAssessment[] Directions;
         public static Assessment Create()
         {
@@ -133,6 +134,7 @@ namespace MaturityApp
             if (a.Directions == null || a.Directions.Length != 21) throw new InvalidDataException("В проекте должны быть данные по 21 направлению.");
             DateTime date;
             if (!DateTime.TryParseExact(a.Date, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out date)) throw new InvalidDataException("Некорректная дата оценки.");
+            SystemPassports.Validate(a.Passport);
             int minimum = Math.Max(1, a.Category);
             HashSet<int> ids = new HashSet<int>();
             foreach (DirectionAssessment d in a.Directions)

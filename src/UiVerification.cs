@@ -48,6 +48,9 @@ namespace MaturityApp
                 Test("all pages including derived analysis preserve answers", AllPages);
                 Test("mass criteria input protects existing grades and supports overwrite undo", MassValueInput);
                 Test("mass visible scope and parameters never invent answers", MassVisibleScope);
+                Test("adding an ARM passport preserves maturity and keeps unknown facts", ArmPassport);
+                Test("new ARM starts a separate organization and empty assessment", NewArm);
+                Test("ARM connection controls agree and security choices require explicit apply", ArmConnectionAndProtection);
                 Test("fast bundle exports and updates the preset ZIP without dialogs", FastBundle);
                 Test("opened bundle stays associated with ZIP for the next one click save", ReopenedBundle);
                 Test("empty scope disables the fast bundle button", EmptyScope);
@@ -224,13 +227,73 @@ namespace MaturityApp
         static void AllPages()
         {
             Assessment a = Assessment.Create(); MainWindow window = Create(a); string before = Answers(a);
-            foreach (string page in new[] { "assessment", "results", "settings", "analysis", "quick" }) { Page(window, page); Assert(!window.IsVisible, "Page rendering showed a window."); }
+            foreach (string page in new[] { "object", "assessment", "results", "settings", "analysis", "quick" }) { Page(window, page); Assert(!window.IsVisible, "Page rendering showed a window."); }
             Assert(Answers(a) == before, "Changing pages filled answers.");
             Assert(Rows(window).Count == 21, "The quick page failed after visiting legacy pages.");
         }
         static Button MassButton(MainWindow window, double value)
         {
             return ((List<Button>)Get(window, "massValueButtons")).Single(b => (double)b.Tag == value);
+        }
+        static void ArmPassport()
+        {
+            Assessment a = Assessment.Create(); a.Organization = "Существующая организация"; a.SystemName = "Существующий объект";
+            a.Directions[0].Answers[0] = 0; a.Directions[1].Included = false; a.Directions[0].Target = 4; a.Directions[0].Evidence = "Проверенный документ";
+            MainWindow window = Create(a); string before = Store.Serialize(a); Page(window, "object");
+            Assert(a.Passport == null && Store.Serialize(a) == before, "Opening the object page created unconfirmed facts.");
+            Click(Tree((DependencyObject)window.Content).OfType<Button>().Single(b => (b.Content as string ?? "").StartsWith("Применить основу")));
+            Assert(a.Passport != null && a.Passport.Workstations == 1 && a.Passport.Routers == 1 && a.Passport.Switches == 0 && a.Passport.Servers == 0, "The explicit ARM basis did not set the expected equipment.");
+            Assert(!a.Passport.Wireless.HasValue && !a.Passport.Internet.HasValue && !a.Passport.Mobile.HasValue && !a.Passport.OwnDevelopment.HasValue, "Applying the base asserted unobserved technologies.");
+            string afterPassport = Store.Serialize(a); SystemPassport p = a.Passport; a.Passport = null; Assert(Store.Serialize(a) == before, "The technical basis changed organization, maturity, goals, scope or evidence."); a.Passport = p;
+            Click(Tree((DependencyObject)window.Content).OfType<Button>().Single(b => (b.Content as string ?? "").StartsWith("Эти шесть технологий")));
+            Assert(p.Domain == false && p.Wireless == false && p.Mobile == false && p.RemoteAdministration == false && p.OwnDevelopment == false && p.ArtificialIntelligence == false, "The explicit no-extra-technologies command missed a property.");
+            Assert(!p.Internet.HasValue, "No-extra-technologies guessed Internet availability.");
+            a.Passport = null; Assert(Store.Serialize(a) == before, "No-extra-technologies altered a maturity answer or scope."); a.Passport = p;
+            ComboBox wifi = Tree((DependencyObject)window.Content).OfType<ComboBox>().Single(c => (c.Tag as string) == "Wi-Fi / беспроводной доступ"); wifi.SelectedIndex = 2;
+            Assert(p.Wireless == true, "An individual exception cannot override the simple basis.");
+            ComboBox external = Tree((DependencyObject)window.Content).OfType<ComboBox>().Single(t => (t.Tag as string) == "К какой внешней системе подключаются"); external.Text = "Внешняя ИС <&>";
+            Assert(p.ExternalSystem == external.Text && a.SystemName == "Существующий объект", "External system input overwrote a custom object name.");
+            TextBox routers = Tree((DependencyObject)window.Content).OfType<TextBox>().Single(t => (t.Tag as string) == "Роутеры"); routers.Text = "-1";
+            Assert(p.Routers == 1, "An invalid count changed the saved valid fact."); routers.Text = "2"; Assert(p.Routers == 2, "A corrected count was not committed.");
+            Page(window, "quick"); Assert(a.Directions[0].Answers[0] == 0 && !a.Directions[1].Included && a.Directions[0].Target == 4, "Returning to assessment changed maturity data.");
+        }
+        static void NewArm()
+        {
+            Assessment old = Assessment.Create(); old.Organization = "Предыдущая организация"; old.Assessor = "Предыдущий сотрудник"; old.Directions[0].Answers[0] = 1;
+            MainWindow window = Create(old); Call(window, "NewArmProject"); Assessment fresh = (Assessment)Get(window, "assessment");
+            Assert(!Object.ReferenceEquals(fresh, old) && fresh.Passport != null && (string)Get(window, "page") == "object", "New ARM did not create an independent project.");
+            Assert(fresh.Organization == "" && fresh.Assessor == "" && fresh.Directions.All(d => d.Answers.All(x => !x.HasValue)), "New ARM carried organization or maturity facts across organizations.");
+            Assert(old.Organization == "Предыдущая организация" && old.Directions[0].Answers[0] == 1, "New ARM mutated the old project snapshot.");
+            ComboBox external = Tree((DependencyObject)window.Content).OfType<ComboBox>().Single(t => (t.Tag as string) == "К какой внешней системе подключаются"); external.Text = "Внешняя ИС";
+            Assert(fresh.SystemName == "АРМ доступа к «Внешняя ИС»", "The generated object title did not follow the external system name.");
+            SystemPassport another = SystemPassports.CreateSingleArm(); another.ExternalSystem = "Другая ИС"; Call(window, "ApplyArmTemplate", another);
+            Assert(fresh.SystemName == "АРМ доступа к «Другая ИС»", "Loading a basis left the previously generated system title.");
+            fresh.SystemName = "Особое название объекта"; another.ExternalSystem = "Третья ИС"; Call(window, "ApplyArmTemplate", another);
+            Assert(fresh.SystemName == "Особое название объекта", "Loading a basis overwrote a custom object title.");
+            Assert(!(bool)Get(window, "live") && !window.IsVisible, "The test used runtime user data or showed a window.");
+        }
+        static void ArmConnectionAndProtection()
+        {
+            Assessment a = Assessment.Create(); a.Passport = SystemPassports.CreateSingleArm(); a.Directions[0].Answers[0] = 0;
+            MainWindow window = Create(a); Page(window, "object");
+            ComboBox channel = Tree((DependencyObject)window.Content).OfType<ComboBox>().Single(c => (c.Tag as string) == "Канал подключения");
+            ComboBox internet = Tree((DependencyObject)window.Content).OfType<ComboBox>().Single(c => (c.Tag as string) == "Выход в интернет");
+            Assert(internet.SelectedIndex == 0 && internet.IsEnabled, "An unknown Internet fact was silently filled."); channel.SelectedIndex = 1;
+            Assert(a.Passport.Internet == true && internet.SelectedIndex == 2 && !internet.IsEnabled, "Internet channel and visible Internet fact disagree.");
+            channel.SelectedIndex = 2; Assert(internet.IsEnabled, "Internet remains locked for a VPN channel."); internet.SelectedIndex = 1;
+            Assert(a.Passport.Channel == "vpn" && a.Passport.Internet == false, "A private VPN cannot be described without Internet.");
+            string beforeProtection = Store.Serialize(a);
+            ComboBox vpn = Tree((DependencyObject)window.Content).OfType<ComboBox>().Single(c => (c.Tag as string) == "СЗИ: Криптозащита / сеть");
+            ComboBox nsd = Tree((DependencyObject)window.Content).OfType<ComboBox>().Single(c => (c.Tag as string) == "СЗИ: Защита от НСД");
+            ComboBox av = Tree((DependencyObject)window.Content).OfType<ComboBox>().Single(c => (c.Tag as string) == "СЗИ: Антивирус");
+            ComboBox boot = Tree((DependencyObject)window.Content).OfType<ComboBox>().Single(c => (c.Tag as string) == "СЗИ: СДЗ");
+            vpn.SelectedIndex = 1; nsd.SelectedIndex = 1; av.SelectedIndex = 1; boot.SelectedIndex = 1;
+            Assert(Store.Serialize(a) == beforeProtection, "Selecting components wrote installed protection before applying it.");
+            nsd.SelectedIndex = 2; Assert(av.SelectedIndex == 0 && !((ComboBoxItem)av.Items[1]).IsEnabled, "SNS built-in antivirus stayed selected with Dallas Lock.");
+            av.SelectedIndex = 2;
+            Click(Tree((DependencyObject)window.Content).OfType<Button>().Single(b => (b.Content as string) == "Вставить выбранный набор в паспорт"));
+            Assert(a.Passport.Protection.Contains("ViPNet") && a.Passport.Protection.Contains("Dallas Lock 8.0") && a.Passport.Protection.Contains("Dr.Web") && a.Passport.Protection.Contains("Соболь"), "The selected security composition was not generated.");
+            Assert(a.Directions[0].Answers[0] == 0 && a.Directions.Sum(d => d.Answers.Count(x => x.HasValue)) == 1, "Security composition inferred a maturity grade.");
         }
         static CheckBox ReplaceMass(MainWindow window)
         {

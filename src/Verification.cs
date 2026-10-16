@@ -28,6 +28,7 @@ namespace MaturityApp
             public bool pass;
             public int referenceCaseCount, referenceAssertions, additionalTests, additionalAssertions, assertionCount;
             public int bulkTestCount, bulkAssertionCount;
+            public int passportTestCount, passportAssertionCount;
             public string startedAtUtc, finishedAtUtc, referenceFile;
             public Dictionary<string, int> referenceLevelCounts = new Dictionary<string, int>();
             public List<string> errors = new List<string>();
@@ -65,6 +66,10 @@ namespace MaturityApp
                 report.bulkTestCount = BulkVerification.TestCount;
                 report.bulkAssertionCount = BulkVerification.AssertionCount;
                 report.assertionCount += report.bulkAssertionCount;
+                Test("single ARM passport and reusable technical templates", SystemPassportVerification.Run);
+                report.passportTestCount = SystemPassportVerification.TestCount;
+                report.passportAssertionCount = SystemPassportVerification.AssertionCount;
+                report.assertionCount += report.passportAssertionCount;
                 VerifyAnalysis();
                 Test("sample reports and saved assessment", CreateSampleReports);
             }

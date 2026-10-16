@@ -35,10 +35,13 @@ namespace MaturityApp
                     demo.Assessor = "Ответственный за информационную безопасность";
                     demo.OrganizationShort = "Пример"; demo.City = "Город";
                     demo.ApproverPosition = "Руководитель организации";
+                    demo.Passport = SystemPassports.CreateSingleArm();
+                    demo.Passport.ExternalSystem = "Внешняя информационная система (пример)";
                     demo.Directions[0].Answers = new double?[] { 1, 1, .5, .5, 1, .5, 0, .5 };
                     demo.Directions[0].Evidence = "Положение о защите информации, утверждённые регламенты и журнал плановых проверок.";
                     MainWindow window = new MainWindow(demo, false);
                     window.RenderPreview("quick", Path.Combine(folder, "Оценка.png"));
+                    window.RenderPreview("object", Path.Combine(folder, "Типовой АРМ.png"));
                     window.RenderPreview("quick", Path.Combine(folder, "Оценка компактно.png"), 1280, 740);
                     window.RenderPreview("bulk", Path.Combine(folder, "Массовое заполнение.png"));
                     window.RenderPreview("assessment", Path.Combine(folder, "Подробно.png"));
@@ -116,7 +119,7 @@ namespace MaturityApp
         TextBlock headerTitle, headerSub, status, sidebarProgress;
         ProgressBar globalProgress;
         TextBox search;
-        Button navAssess, navResults, navAnalysis, navSettings;
+        Button navObject, navAssess, navResults, navAnalysis, navSettings;
         TextBlock directionLevel, directionP, directionProgress, remainingText, overallValue, overallLabel, answeredValue, countValue;
         StackPanel recommendationPanel;
         readonly List<RadioButton[]> answerRadios = new List<RadioButton[]>();
@@ -198,6 +201,7 @@ namespace MaturityApp
             StackPanel title = new StackPanel(); headerTitle = Theme.Text("Оценка зрелости", 24, null, true);
             headerSub = Theme.Text("Данные сохраняются автоматически", 12, Theme.Muted); headerSub.Margin = new Thickness(0, 5, 10, 0); title.Children.Add(headerTitle); title.Children.Add(headerSub); header.Children.Add(title);
             StackPanel actions = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center }; Grid.SetColumn(actions, 1); header.Children.Add(actions);
+            actions.Children.Add(Theme.Button("Новый АРМ", NewArmProject));
             actions.Children.Add(Theme.Button("Открыть", OpenProject));
             Button more = Theme.Button("Ещё  ▾", () => { }); ContextMenu menu = new ContextMenu();
             MenuItem create = new MenuItem { Header = "Новая оценка" }; create.Click += (s, e) => NewProject(); menu.Items.Add(create);
@@ -213,7 +217,7 @@ namespace MaturityApp
             bundleButton.ToolTip = "Проект, Word и Excel одним действием. При первом сохранении выберите файл; следующие нажатия обновят его."; actions.Children.Add(bundleButton);
             Grid tabs = new Grid { Margin = new Thickness(24, 0, 24, 12) }; tabs.ColumnDefinitions.Add(new ColumnDefinition()); tabs.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); Grid.SetRow(tabs, 1); shell.Children.Add(tabs);
             StackPanel nav = new StackPanel { Orientation = Orientation.Horizontal };
-            navAssess = Nav("Оценка", "quick"); navResults = Nav("Результат", "results"); navAnalysis = Nav("Аналитика и план", "analysis"); navSettings = Nav("Данные для отчёта", "settings"); nav.Children.Add(navAssess); nav.Children.Add(navResults); nav.Children.Add(navAnalysis); nav.Children.Add(navSettings); tabs.Children.Add(nav);
+            navObject = Nav("Объект", "object"); navAssess = Nav("Оценка", "quick"); navResults = Nav("Результат", "results"); navAnalysis = Nav("Аналитика и план", "analysis"); navSettings = Nav("Данные для отчёта", "settings"); nav.Children.Add(navObject); nav.Children.Add(navAssess); nav.Children.Add(navResults); nav.Children.Add(navAnalysis); nav.Children.Add(navSettings); tabs.Children.Add(nav);
             StackPanel progress = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center }; Grid.SetColumn(progress, 1); tabs.Children.Add(progress);
             sidebarProgress = Theme.Text("Заполнено 0 из 168", 12, Theme.Muted); progress.Children.Add(sidebarProgress);
             globalProgress = new ProgressBar { Minimum = 0, Maximum = 100, Width = 145, Height = 5, Margin = new Thickness(12, 0, 0, 0), Foreground = Theme.Blue, Background = Theme.B("#DDE5F1"), BorderThickness = new Thickness(0) }; progress.Children.Add(globalProgress);
@@ -241,14 +245,18 @@ namespace MaturityApp
         void ShowPage()
         {
             building = true; center.Children.Clear(); answerRadios.Clear(); answerBorders.Clear(); quickRows.Clear(); quickScore = quickNotice = quickHint = null; quickCopySource = null; massExpander = null; massCriterionBox = null; massScopeText = null; massValueButtons.Clear();
+            passportDescription = passportTopology = passportUnknown = null;
+            passportChannelChoice = passportInternetChoice = null;
+            passportReference = null; passportReferenceLink = null;
             directionLevel = directionP = directionProgress = remainingText = overallValue = overallLabel = answeredValue = countValue = null; recommendationPanel = null;
             bool assessing = page == "quick" || page == "assessment";
+            navObject.Background = page == "object" ? Theme.Blue : Brushes.Transparent; navObject.Foreground = page == "object" ? Brushes.White : Theme.Muted;
             navAssess.Background = assessing ? Theme.Blue : Brushes.Transparent; navAssess.Foreground = assessing ? Brushes.White : Theme.Muted;
             navResults.Background = page == "results" ? Theme.Blue : Brushes.Transparent; navResults.Foreground = page == "results" ? Brushes.White : Theme.Muted;
             navAnalysis.Background = page == "analysis" ? Theme.Blue : Brushes.Transparent; navAnalysis.Foreground = page == "analysis" ? Brushes.White : Theme.Muted;
             navSettings.Background = page == "settings" ? Theme.Blue : Brushes.Transparent; navSettings.Foreground = page == "settings" ? Brushes.White : Theme.Muted;
-            headerTitle.Text = page == "quick" ? "Оценка зрелости" : page == "assessment" ? "Подробная оценка" : page == "results" ? "Результат оценки" : page == "analysis" ? "Аналитика и план" : "Данные для отчёта";
-            if (page == "quick") BuildQuickAssessment(); else if (page == "assessment") BuildAssessment(); else if (page == "results") BuildResults(); else if (page == "analysis") BuildAnalysis(); else BuildSettings();
+            headerTitle.Text = page == "object" ? "Типовой АРМ" : page == "quick" ? "Оценка зрелости" : page == "assessment" ? "Подробная оценка" : page == "results" ? "Результат оценки" : page == "analysis" ? "Аналитика и план" : "Данные для отчёта";
+            if (page == "object") BuildPassport(); else if (page == "quick") BuildQuickAssessment(); else if (page == "assessment") BuildAssessment(); else if (page == "results") BuildResults(); else if (page == "analysis") BuildAnalysis(); else BuildSettings();
             building = false; UpdateNumbers(); UpdateHeader();
         }
         StackPanel PageStack()

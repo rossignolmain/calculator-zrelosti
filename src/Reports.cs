@@ -49,6 +49,13 @@ namespace MaturityApp
             AssessmentAnalysis analysis = Analysis.Build(a);
             string[] names = { "Сводка", "Ответы", "Рекомендации", "Профиль критериев", "План улучшений", "Общие дефициты" };
             string[] sheets = { SummarySheet(a, summary), AnswersSheet(a), RecommendationsSheet(a), CriterionProfileSheet(analysis), DeficitPlanSheet(analysis), GroupedActionsSheet(analysis) };
+            if (a.Passport != null)
+            {
+                Array.Resize(ref names, names.Length + 1);
+                Array.Resize(ref sheets, sheets.Length + 1);
+                names[names.Length - 1] = "Паспорт объекта";
+                sheets[sheets.Length - 1] = PassportSheet(a);
+            }
             AtomicWrite(path, delegate(Stream output)
             {
                 using (ZipArchive zip = new ZipArchive(output, ZipArchiveMode.Create, true))
@@ -136,6 +143,12 @@ namespace MaturityApp
             AppendOptionalWord(b, "Должность составителя", a.AssessorPosition);
             AppendOptionalWord(b, "Для утверждения", Person(a.ApproverPosition, a.ApproverName));
             b.Append(P("Дата оценки: " + DateText(a.Date) + "    Категория: " + CategoryText(a.Category), null));
+            if (a.Passport != null)
+            {
+                b.Append(PageBreak());
+                AppendPassportWord(b, a);
+                b.Append(PageBreak());
+            }
             b.Append(P("1. Сводные результаты", "Heading1"));
             b.Append(P("Включено направлений: " + s.Count + ". Заполнено ответов: " + s.Answered + " из " + s.Total + ". Достигнута цель: " + s.Met + " из " + s.Count + ".", null));
             b.Append(P("Средний текущий уровень: " + s.Average.ToString("0.00", Inv) + "; средний целевой: " + s.TargetAverage.ToString("0.00", Inv) + ". Общий уровень: " + ((int)Math.Floor(s.Average)) + " — " + Calc.LevelName((int)Math.Floor(s.Average)) + ".", null));
@@ -193,6 +206,104 @@ namespace MaturityApp
             }
             b.Append("<w:sectPr><w:footerReference w:type=\"default\" r:id=\"rFooter\"/><w:pgSz w:w=\"11906\" w:h=\"16838\"/><w:pgMar w:top=\"1000\" w:right=\"850\" w:bottom=\"1000\" w:left=\"1000\" w:header=\"400\" w:footer=\"400\"/><w:cols w:space=\"708\"/></w:sectPr></w:body></w:document>");
             return b.ToString();
+        }
+
+        private static void AppendPassportWord(StringBuilder b, Assessment a)
+        {
+            SystemPassport p = a.Passport;
+            b.Append(P("Описание объекта и состава", "Heading1"));
+            b.Append(P(SystemPassports.Description(p), null));
+            b.Append(P("Основа конфигурации: " + SystemPassports.TemplateName(p) + ". Параметры ниже отражают введённые сведения об объекте. Они не определяют оценки зрелости, категорию или класс защищённости.", "Small"));
+            b.Append(TableStart(new int[] { 3600, 5900 }));
+            b.Append(TableRow(new string[] { "Характеристика", "Сведения" }, true));
+            foreach (KeyValuePair<string, string> fact in PassportFacts(p))
+                b.Append(TableRow(new string[] { fact.Key, fact.Value }, false));
+            b.Append("</w:tbl>");
+            b.Append(P("Состав оборудования", "Heading2"));
+            b.Append(TableStart(new int[] { 2400, 1000, 6100 }));
+            b.Append(TableRow(new string[] { "Компонент", "Количество", "Назначение" }, true));
+            foreach (SystemComponent component in SystemPassports.Components(p))
+                b.Append(TableRow(new string[] { component.Name, component.Count.ToString(Inv), component.Purpose }, false));
+            b.Append("</w:tbl>");
+            b.Append(P("Текстовая схема подключения", "Heading2"));
+            b.Append(P(SystemPassports.Topology(p), null));
+            AppendPassportUnknownWord(b, p);
+            if (!String.IsNullOrWhiteSpace(p.Notes))
+            {
+                b.Append(P("Примечания к объекту", "Heading2"));
+                b.Append(P(p.Notes, null));
+            }
+        }
+
+        private static void AppendPassportUnknownWord(StringBuilder b, SystemPassport p)
+        {
+            b.Append(P("Неуточнённые характеристики", "Heading2"));
+            string[] unknown = SystemPassports.UnknownFields(p);
+            if (unknown.Length == 0) b.Append(P("Все характеристики паспорта уточнены.", null));
+            else
+            {
+                b.Append(P("Отсутствие сведений означает, что характеристика требует уточнения. Оно не означает, что технология отсутствует.", "Small"));
+                for (int i = 0; i < unknown.Length; i++) b.Append(P((i + 1) + ". " + unknown[i], null));
+            }
+        }
+
+        private static KeyValuePair<string, string>[] PassportFacts(SystemPassport p)
+        {
+            return new KeyValuePair<string, string>[] {
+                new KeyValuePair<string, string>("Подключаемая система", Empty(p.ExternalSystem)),
+                new KeyValuePair<string, string>("Способ работы", SystemPassports.ConnectionText(p.Connection)),
+                new KeyValuePair<string, string>("Канал подключения", SystemPassports.ChannelText(p.Channel)),
+                new KeyValuePair<string, string>("Домен", SystemPassports.BooleanText(p.Domain)),
+                new KeyValuePair<string, string>("Доступ в интернет", SystemPassports.BooleanText(p.Internet)),
+                new KeyValuePair<string, string>("Беспроводная сеть (Wi-Fi)", SystemPassports.BooleanText(p.Wireless)),
+                new KeyValuePair<string, string>("Мобильные устройства", SystemPassports.BooleanText(p.Mobile)),
+                new KeyValuePair<string, string>("Удалённое администрирование", SystemPassports.BooleanText(p.RemoteAdministration)),
+                new KeyValuePair<string, string>("Собственная разработка ПО", SystemPassports.BooleanText(p.OwnDevelopment)),
+                new KeyValuePair<string, string>("Искусственный интеллект", SystemPassports.BooleanText(p.ArtificialIntelligence)),
+                new KeyValuePair<string, string>("Используемые средства защиты", Empty(p.Protection))
+            };
+        }
+
+        private static string PassportSheet(Assessment a)
+        {
+            SystemPassport p = a.Passport;
+            StringBuilder rows = new StringBuilder();
+            List<string> merges = new List<string> { "A1:D1", "A2:D2", "A3:D3" };
+            rows.Append(Row(1, T("A1", "ПАСПОРТ ОБЪЕКТА", 1), 30));
+            rows.Append(Row(2, T("A2", SystemPassports.Description(p), 0), 80));
+            rows.Append(Row(3, T("A3", "Паспорт отражает введённые сведения и не определяет оценки зрелости, категорию или класс защищённости. Неуточнённая характеристика не означает отсутствие технологии.", 5), 50));
+            int row = 5;
+            AppendPassportRow(rows, merges, ref row, "Организация", Empty(a.Organization));
+            AppendPassportRow(rows, merges, ref row, "Система / объект оценки", Empty(a.SystemName));
+            AppendPassportRow(rows, merges, ref row, "Основа конфигурации", SystemPassports.TemplateName(p));
+            foreach (KeyValuePair<string, string> fact in PassportFacts(p))
+                AppendPassportRow(rows, merges, ref row, fact.Key, fact.Value);
+            row++;
+            rows.Append(Row(row, T("A" + row, "СОСТАВ ОБОРУДОВАНИЯ", 4), 26));
+            merges.Add("A" + row + ":D" + row); row++;
+            rows.Append(Row(row, HeaderCells(new string[] { "Компонент", "Количество", "Назначение", "" }, row), 30));
+            merges.Add("C" + row + ":D" + row); row++;
+            foreach (SystemComponent component in SystemPassports.Components(p))
+            {
+                rows.Append(Row(row, T("A" + row, component.Name, 0) + N("B" + row, component.Count, 3) + T("C" + row, component.Purpose, 0), 42));
+                merges.Add("C" + row + ":D" + row); row++;
+            }
+            row++;
+            AppendPassportRow(rows, merges, ref row, "Текстовая схема подключения", SystemPassports.Topology(p), 90);
+            string[] unknown = SystemPassports.UnknownFields(p);
+            AppendPassportRow(rows, merges, ref row, "Неуточнённые характеристики", unknown.Length == 0 ? "Все характеристики паспорта уточнены." : String.Join("\n", unknown), unknown.Length == 0 ? 42 : Math.Min(300, 28 + unknown.Length * 18));
+            if (!String.IsNullOrWhiteSpace(p.Notes)) AppendPassportRow(rows, merges, ref row, "Примечания к объекту", p.Notes, 90);
+            StringBuilder mergeXml = new StringBuilder("<mergeCells count=\"" + merges.Count + "\">");
+            foreach (string range in merges) mergeXml.Append("<mergeCell ref=\"" + range + "\"/>");
+            mergeXml.Append("</mergeCells>");
+            return Sheet(rows, "A1:D" + (row - 1), "<col min=\"1\" max=\"1\" width=\"38\" customWidth=\"1\"/><col min=\"2\" max=\"2\" width=\"14\" customWidth=\"1\"/><col min=\"3\" max=\"3\" width=\"40\" customWidth=\"1\"/><col min=\"4\" max=\"4\" width=\"28\" customWidth=\"1\"/>", 3, "", mergeXml.ToString(), false);
+        }
+
+        private static void AppendPassportRow(StringBuilder rows, List<string> merges, ref int row, string label, string value, int height = 42)
+        {
+            rows.Append(Row(row, T("A" + row, label, 4) + T("B" + row, value, 0), height));
+            merges.Add("B" + row + ":D" + row);
+            row++;
         }
 
         private static void AppendAnalysisWord(StringBuilder b, AssessmentAnalysis analysis)
@@ -426,7 +537,7 @@ namespace MaturityApp
 
         private static string Sheet(StringBuilder rows, string dimension, string cols, int freezeRows, string filter, string merges, bool landscape)
         {
-            return "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><worksheet xmlns=\"" + NsSheet + "\"><sheetPr><pageSetUpPr fitToPage=\"1\"/></sheetPr><dimension ref=\"" + dimension + "\"/><sheetViews><sheetView workbookViewId=\"0\" showGridLines=\"0\"><pane ySplit=\"" + freezeRows + "\" topLeftCell=\"A" + (freezeRows + 1) + "\" activePane=\"bottomLeft\" state=\"frozen\"/><selection pane=\"bottomLeft\" activeCell=\"A" + (freezeRows + 1) + "\" sqref=\"A" + (freezeRows + 1) + "\"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight=\"18\"/><cols>" + cols + "</cols><sheetData>" + rows + "</sheetData><autoFilter ref=\"" + filter + "\"/>" + merges + "<printOptions horizontalCentered=\"1\"/><pageMargins left=\"0.3\" right=\"0.3\" top=\"0.5\" bottom=\"0.5\" header=\"0.2\" footer=\"0.2\"/><pageSetup paperSize=\"9\" orientation=\"" + (landscape ? "landscape" : "portrait") + "\" fitToWidth=\"1\" fitToHeight=\"0\"/><headerFooter><oddFooter>&amp;LОценка зрелости ИБ&amp;RСтраница &amp;P из &amp;N</oddFooter></headerFooter></worksheet>";
+            return "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><worksheet xmlns=\"" + NsSheet + "\"><sheetPr><pageSetUpPr fitToPage=\"1\"/></sheetPr><dimension ref=\"" + dimension + "\"/><sheetViews><sheetView workbookViewId=\"0\" showGridLines=\"0\"><pane ySplit=\"" + freezeRows + "\" topLeftCell=\"A" + (freezeRows + 1) + "\" activePane=\"bottomLeft\" state=\"frozen\"/><selection pane=\"bottomLeft\" activeCell=\"A" + (freezeRows + 1) + "\" sqref=\"A" + (freezeRows + 1) + "\"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight=\"18\"/><cols>" + cols + "</cols><sheetData>" + rows + "</sheetData>" + (String.IsNullOrEmpty(filter) ? "" : "<autoFilter ref=\"" + filter + "\"/>") + merges + "<printOptions horizontalCentered=\"1\"/><pageMargins left=\"0.3\" right=\"0.3\" top=\"0.5\" bottom=\"0.5\" header=\"0.2\" footer=\"0.2\"/><pageSetup paperSize=\"9\" orientation=\"" + (landscape ? "landscape" : "portrait") + "\" fitToWidth=\"1\" fitToHeight=\"0\"/><headerFooter><oddFooter>&amp;LОценка зрелости ИБ&amp;RСтраница &amp;P из &amp;N</oddFooter></headerFooter></worksheet>";
         }
 
         private static string WordStyles()
