@@ -58,6 +58,8 @@ namespace MaturityApp
                 VerifyPersistence();
                 VerifyValidation();
                 VerifyProjectTools();
+                VerifyQuickInput();
+                VerifyBundleLoading();
                 Test("sample reports and saved assessment", CreateSampleReports);
             }
             catch (Exception ex) { report.errors.Add("Verification infrastructure: " + ex.GetType().Name + ": " + ex.Message); }
@@ -535,6 +537,232 @@ namespace MaturityApp
             return new JavaScriptSerializer { MaxJsonLength = 4 * 1024 * 1024 }.Serialize(new {
                 a.Version, a.SystemName, a.Date, a.Category, a.Notes, a.DocumentNumber, a.Directions
             });
+        }
+        static void VerifyQuickInput()
+        {
+            Test("quick input labels cover exact criterion grades without merging training levels", delegate
+            {
+                Check(QuickInput.HeaderNames.Length == 8, "Quick input has eight criterion headers");
+                for (int criterion = 0; criterion < Data.Criteria.Length; criterion++)
+                    foreach (AnswerOption option in Data.Criteria[criterion].Options)
+                        Check(!String.IsNullOrWhiteSpace(QuickInput.ShortLabel(criterion, option.Value)), "Every allowed grade has a short label");
+                Check(QuickInput.ShortLabel(5, .3) != QuickInput.ShortLabel(5, .5), "Training 0.3 and 0.5 have distinct meanings");
+                bool badCriterion = false, badValue = false;
+                try { QuickInput.ShortLabel(8, 0); } catch (ArgumentOutOfRangeException) { badCriterion = true; }
+                try { QuickInput.ShortLabel(0, .3); } catch (ArgumentOutOfRangeException) { badValue = true; }
+                Check(badCriterion && badValue, "Invalid criterion and nonapplicable grade are rejected");
+            });
+            Test("repeat command copies only known source facts into empty included cells", delegate
+            {
+                Assessment a = Assessment.Create();
+                a.Organization = "Проверка повторения"; a.SystemName = "Система"; a.Assessor = "Оценщик";
+                a.Date = "2026-10-16"; a.Notes = "Общие примечания"; a.DocumentNumber = "УЗИ-71";
+                foreach (DirectionAssessment d in a.Directions) { d.Target = d.Id % 2 == 0 ? 4 : 1; d.Evidence = "Подтверждение " + d.Id; }
+                DirectionAssessment source = a.Directions.Single(d => d.Id == 7);
+                source.Answers = new double?[] { 1, null, .5, null, 0, .3, null, 1 };
+                a.Directions[1].Included = false;
+                a.Directions[2].Answers[0] = 0; a.Directions[2].Answers[2] = 1; a.Directions[2].Answers[5] = .5;
+                a.Directions = a.Directions.Reverse().ToArray();
+                string before = Store.Serialize(a), contextBefore = QuickInputNonAnswerState(a);
+                List<AnswerChange> changes = QuickInput.CopyIntoEmpty(a, 7);
+                Check(changes.Count == 92, "Five known source answers copied to 19 included destinations minus three existing answers");
+                Check(changes.All(c => c.Before == null && c.After.HasValue && c.DirectionId != 7 && c.DirectionId != 2), "Change records contain only filled blanks in eligible destinations");
+                Check(changes.Select(c => c.DirectionId + ":" + c.Criterion).Distinct().Count() == changes.Count, "Each changed cell appears exactly once");
+                DirectionAssessment existing = a.Directions.Single(d => d.Id == 3);
+                Check(existing.Answers[0] == 0 && existing.Answers[2] == 1 && existing.Answers[5] == .5, "Existing explicit zero and other answers are never overwritten");
+                Check(a.Directions.Single(d => d.Id == 2).Answers.All(x => !x.HasValue), "Excluded destination answers stay untouched");
+                Check(a.Directions.Where(d => d.Included && d.Id != 7).All(d => !d.Answers[1].HasValue && !d.Answers[3].HasValue && !d.Answers[6].HasValue), "Unknown source criteria remain unknown in destinations");
+                Check(changes.Any(c => c.Criterion == 4 && c.After == 0) && changes.Any(c => c.Criterion == 5 && c.After == .3), "Explicit source zero and training 0.3 are copied as actual selected facts");
+                Check(QuickInputNonAnswerState(a) == contextBefore, "Repeat preserves metadata date number scope goals notes and evidence");
+                Check(QuickInput.CopyIntoEmpty(a, 7).Count == 0, "Repeating the same command again is a no-op");
+                Check(QuickInput.Revert(a, changes) == changes.Count, "Undo restores every unchanged repeated cell");
+                Check(Store.Serialize(a) == before, "Copy followed by undo restores exact original assessment including direction order");
+            });
+            Test("repeat undo preserves later manual values and unrelated changes", delegate
+            {
+                Assessment a = Assessment.Create();
+                a.Directions[0].Answers = NullableAnswers(Representatives[4]);
+                List<AnswerChange> changes = QuickInput.CopyIntoEmpty(a, 1);
+                Check(changes.Count == 160, "Complete source can explicitly populate 20 empty directions");
+                a.Directions[1].Answers[0] = 0;
+                a.Directions[1].Answers[1] = null;
+                a.Directions[2].Included = false;
+                a.Directions[3].Target = 4; a.Directions[3].Evidence = "Позднее подтверждение";
+                a.Directions[0].Answers[0] = .5;
+                int reverted = QuickInput.Revert(a, changes);
+                Check(reverted == 158, "Undo skips a changed and a cleared copied cell");
+                Check(a.Directions[1].Answers[0] == 0 && !a.Directions[1].Answers[1].HasValue, "Later manual zero and cleared answer survive undo");
+                Check(!a.Directions[2].Included && a.Directions[2].Answers.All(x => !x.HasValue), "Undo restores copied answers without reverting a later scope change");
+                Check(a.Directions[3].Target == 4 && a.Directions[3].Evidence == "Позднее подтверждение", "Undo does not revert later goal or evidence changes");
+                Check(a.Directions[0].Answers[0] == .5, "Undo never changes the source direction");
+                Check(QuickInput.Revert(a, changes) == 0, "Repeated undo is harmless");
+            });
+            Test("empty source and fully assessed destinations do not invent answers", delegate
+            {
+                Assessment a = Assessment.Create(); string before = Store.Serialize(a);
+                Check(QuickInput.CopyIntoEmpty(a, 1).Count == 0 && Store.Serialize(a) == before, "Blank source cannot fill any answer");
+                foreach (DirectionAssessment d in a.Directions) d.Answers = NullableAnswers(Representatives[0]);
+                a.Directions[0].Answers = NullableAnswers(Representatives[4]); before = Store.Serialize(a);
+                Check(QuickInput.CopyIntoEmpty(a, 1).Count == 0 && Store.Serialize(a) == before, "Fully assessed zero destinations cannot be overwritten by a high-scoring source");
+            });
+            Test("repeat validates source and complete plan before any mutation", delegate
+            {
+                Assessment a = Assessment.Create(); a.Directions[0].Answers = NullableAnswers(Representatives[4]);
+                foreach (int sourceId in new[] { 0, 22 })
+                {
+                    string before = Store.Serialize(a); bool rejected = false;
+                    try { QuickInput.CopyIntoEmpty(a, sourceId); } catch { rejected = true; }
+                    Check(rejected && Store.Serialize(a) == before, "Invalid source ID rejected without changes: " + sourceId);
+                }
+                a.Directions[0].Included = false; string excludedBefore = Store.Serialize(a); bool excludedRejected = false;
+                try { QuickInput.CopyIntoEmpty(a, 1); } catch { excludedRejected = true; }
+                Check(excludedRejected && Store.Serialize(a) == excludedBefore, "Excluded source rejected without changes");
+                a.Directions[0].Included = true; a.Directions[20].Answers = new double?[7];
+                string malformedBefore = Store.Serialize(a); bool malformedRejected = false;
+                try { QuickInput.CopyIntoEmpty(a, 1); } catch { malformedRejected = true; }
+                Check(malformedRejected && Store.Serialize(a) == malformedBefore, "Late invalid destination rejected before any earlier destination is modified");
+            });
+            Test("undo safely ignores malformed change records", delegate
+            {
+                Assessment a = Assessment.Create(); a.Directions[0].Answers[0] = 1;
+                string before = Store.Serialize(a);
+                AnswerChange[] malformed = {
+                    null,
+                    new AnswerChange { DirectionId = 1, Criterion = -1, Before = null, After = 1 },
+                    new AnswerChange { DirectionId = 1, Criterion = 8, Before = null, After = 1 },
+                    new AnswerChange { DirectionId = 42, Criterion = 0, Before = null, After = 1 },
+                    new AnswerChange { DirectionId = 1, Criterion = 0, Before = .3, After = 1 },
+                    new AnswerChange { DirectionId = 1, Criterion = 0, Before = null, After = Double.NaN },
+                    new AnswerChange { DirectionId = 1, Criterion = 0, Before = 1, After = 1 }
+                };
+                Check(QuickInput.Revert(a, malformed) == 0 && Store.Serialize(a) == before, "Malformed undo records never change unrelated assessment data");
+            });
+        }
+        static string QuickInputNonAnswerState(Assessment a)
+        {
+            return new JavaScriptSerializer { MaxJsonLength = 4 * 1024 * 1024 }.Serialize(new {
+                a.Version, a.Organization, a.OrganizationShort, a.OrganizationAddress, a.City,
+                a.Assessor, a.AssessorPosition, a.ApproverName, a.ApproverPosition,
+                a.SystemName, a.Date, a.Category, a.Notes, a.DocumentNumber,
+                Directions = a.Directions.Select(d => new { d.Id, d.Included, d.Target, d.Evidence }).ToArray()
+            });
+        }
+        static void VerifyBundleLoading()
+        {
+            Test("bundle reopen preserves Unicode explicit zero training grade and unanswered cells", delegate
+            {
+                Assessment a = WithLevels(1, 2);
+                a.Organization = "ООО «Возвращение» & партнёры 🔒"; a.SystemName = "ГИС «Учёт»";
+                a.Assessor = "Иванов Пётр"; a.Date = "2026-10-16";
+                a.OrganizationShort = "Возвращение"; a.City = "Екатеринбург";
+                a.ApproverName = "Смирнова Анна"; a.DocumentNumber = "УЗИ/2026-Ё";
+                a.Notes = "Первая строка\nВторая строка: <проверка> & Unicode.";
+                a.Directions[0].Answers[0] = 0; a.Directions[0].Answers[1] = null; a.Directions[0].Answers[5] = .3;
+                a.Directions[0].Evidence = "Протокол № 7, «подтверждение» & журнал.";
+                string bundle = Path.Combine(outputFolder, "reopen-roundtrip.ZIP");
+                ProjectTools.ExportBundle(a, bundle, false, false);
+                Assessment loaded = ProjectTools.LoadAssessmentFile(bundle);
+                Check(Store.Serialize(loaded) == Store.Serialize(a), "ZIP primary save format reopens the exact assessment data");
+                Check(loaded.Directions[0].Answers[0] == 0 && loaded.Directions[0].Answers[5] == .3 && !loaded.Directions[0].Answers[1].HasValue, "Zero training 0.3 and blank remain distinct after bundle reopen");
+                string json = Path.Combine(outputFolder, "reopen-roundtrip.uzi.json");
+                Store.Save(a, json);
+                Check(Store.Serialize(ProjectTools.LoadAssessmentFile(json)) == Store.Serialize(a), "Non-ZIP project input delegates to normal JSON loading");
+                report.generatedFiles.Add(bundle); report.generatedFiles.Add(json);
+            });
+            Test("bundle loader ignores unrelated and traversal entries and never extracts files", delegate
+            {
+                Assessment a = WithLevels(3); a.Organization = "Правильный проект";
+                string path = Path.Combine(outputFolder, "reopen-unrelated.zip");
+                string escapeName = "maturity-loader-" + Guid.NewGuid().ToString("N") + ".txt";
+                string escapeTarget = Path.Combine(Path.GetDirectoryName(outputFolder), escapeName);
+                byte[] project = Encoding.UTF8.GetBytes(Store.Serialize(a));
+                byte[] bomProject = new byte[project.Length + 3]; bomProject[0] = 0xEF; bomProject[1] = 0xBB; bomProject[2] = 0xBF;
+                Buffer.BlockCopy(project, 0, bomProject, 3, project.Length);
+                WriteTestZip(path,
+                    ZipInput("../" + escapeName, Encoding.UTF8.GetBytes("Do not extract.")),
+                    ZipInput("folder/01 Проект.uzi.json", Encoding.UTF8.GetBytes("INVALID JSON")),
+                    ZipInput("./01 Проект.uzi.json", Encoding.UTF8.GetBytes("ALSO INVALID")),
+                    ZipInput("unrelated-large.bin", new byte[4 * 1024 * 1024 + 1]),
+                    ZipInput("01 Проект.uzi.json", bomProject));
+                string[] beforeFiles = Directory.GetFileSystemEntries(outputFolder).OrderBy(x => x).ToArray();
+                Assessment loaded = ProjectTools.LoadAssessmentFile(path);
+                Check(Store.Serialize(loaded) == Store.Serialize(a), "Only the exact root project entry is read, supporting a UTF8 BOM");
+                Check(!File.Exists(escapeTarget), "Traversal entry is never extracted outside the bundle directory");
+                Check(Directory.GetFileSystemEntries(outputFolder).OrderBy(x => x).SequenceEqual(beforeFiles), "Loading a bundle creates no files or directories");
+                report.generatedFiles.Add(path);
+            });
+            Test("invalid bundle formats reject before replacing current assessment state", delegate
+            {
+                Assessment current = WithLevels(4); current.Organization = "Текущая оценка не должна потеряться";
+                string before = Store.Serialize(current);
+                string path = Path.Combine(outputFolder, "reopen-invalid-test.zip");
+                try
+                {
+                    byte[] good = Encoding.UTF8.GetBytes(Store.Serialize(Assessment.Create()));
+                    WriteTestZip(path, ZipInput("Прочитайте.txt", Encoding.UTF8.GetBytes("No project")));
+                    AssertBundleRejected(path, ref current, before, "Missing exact project entry");
+                    WriteTestZip(path, ZipInput("01 Проект.uzi.json", good), ZipInput("01 Проект.uzi.json", good));
+                    AssertBundleRejected(path, ref current, before, "Duplicate exact project entries");
+                    foreach (byte[] invalid in new[] {
+                        Encoding.UTF8.GetBytes("{"),
+                        Encoding.UTF8.GetBytes("{\"Version\":2}"),
+                        Encoding.UTF8.GetBytes(Store.Serialize(Assessment.Create()).Replace("\"Version\":1", "\"Version\":9")),
+                        new byte[] { 0xFF, 0xFE, 0x00 }
+                    })
+                    {
+                        WriteTestZip(path, ZipInput("01 Проект.uzi.json", invalid));
+                        AssertBundleRejected(path, ref current, before, "Malformed invalid-version or non-UTF8 project");
+                    }
+                    Assessment invalidAnswers = Assessment.Create(); invalidAnswers.Directions[0].Answers[0] = .25;
+                    WriteTestZip(path, ZipInput("01 Проект.uzi.json", Encoding.UTF8.GetBytes(Store.Serialize(invalidAnswers))));
+                    AssertBundleRejected(path, ref current, before, "Project with an unsupported answer");
+                    File.WriteAllText(path, "This is not a ZIP archive.", new UTF8Encoding(false));
+                    AssertBundleRejected(path, ref current, before, "Non-ZIP bytes with ZIP extension");
+                }
+                finally { if (File.Exists(path)) File.Delete(path); }
+            });
+            Test("bundle loader enforces actual decompressed project size as well as entry length", delegate
+            {
+                Assessment current = Assessment.Create(); current.Organization = "Существующая оценка";
+                string before = Store.Serialize(current);
+                string path = Path.Combine(outputFolder, "reopen-size-limit-test.zip");
+                try
+                {
+                    byte[] prefix = Encoding.UTF8.GetBytes(Store.Serialize(Assessment.Create()));
+                    byte[] oversized = new byte[4 * 1024 * 1024 + 1];
+                    Buffer.BlockCopy(prefix, 0, oversized, 0, prefix.Length);
+                    for (int i = prefix.Length; i < oversized.Length; i++) oversized[i] = 0x20;
+                    WriteTestZip(path, ZipInput("01 Проект.uzi.json", oversized));
+                    AssertBundleRejected(path, ref current, before, "Project advertised as larger than four MiB");
+                    byte[] zipBytes = File.ReadAllBytes(path); int central = -1;
+                    for (int i = zipBytes.Length - 46; i >= 0; i--)
+                        if (zipBytes[i] == 0x50 && zipBytes[i + 1] == 0x4B && zipBytes[i + 2] == 0x01 && zipBytes[i + 3] == 0x02) { central = i; break; }
+                    if (central < 0) throw new InvalidDataException("Test ZIP central directory not found.");
+                    zipBytes[central + 24] = 1; zipBytes[central + 25] = zipBytes[central + 26] = zipBytes[central + 27] = 0;
+                    File.WriteAllBytes(path, zipBytes);
+                    using (ZipArchive forged = ZipFile.OpenRead(path)) Check(forged.Entries.Single().Length == 1, "Forged ZIP test actually understates the uncompressed project length");
+                    AssertBundleRejected(path, ref current, before, "Actual decompressed project exceeds the limit despite forged entry length");
+                }
+                finally { if (File.Exists(path)) File.Delete(path); }
+            });
+        }
+        static KeyValuePair<string, byte[]> ZipInput(string name, byte[] content)
+        {
+            return new KeyValuePair<string, byte[]>(name, content);
+        }
+        static void WriteTestZip(string path, params KeyValuePair<string, byte[]>[] entries)
+        {
+            using (FileStream output = new FileStream(path, FileMode.Create, FileAccess.Write))
+            using (ZipArchive archive = new ZipArchive(output, ZipArchiveMode.Create, false, Encoding.UTF8))
+                foreach (KeyValuePair<string, byte[]> item in entries)
+                    using (Stream stream = archive.CreateEntry(item.Key, CompressionLevel.Optimal).Open()) stream.Write(item.Value, 0, item.Value.Length);
+        }
+        static void AssertBundleRejected(string path, ref Assessment current, string before, string label)
+        {
+            bool rejected = false;
+            try { current = ProjectTools.LoadAssessmentFile(path); } catch (InvalidDataException) { rejected = true; }
+            Check(rejected, label + " must throw InvalidDataException");
+            Check(Store.Serialize(current) == before, label + " must preserve current assessment state");
         }
         static string ReadZipText(ZipArchiveEntry entry)
         {

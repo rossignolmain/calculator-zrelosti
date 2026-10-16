@@ -1,0 +1,269 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.IO.Compression;
+using System.Linq;
+using System.Reflection;
+using System.Text;
+using System.Web.Script.Serialization;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
+
+namespace MaturityApp
+{
+    // Exercises only this application's in-memory controls. No Window.Show,
+    // Application.Run, native input, screenshots, external programs or user data.
+    public static class UiVerification
+    {
+        public sealed class Result
+        {
+            public bool pass, headlessOnly = true;
+            public int tests, assertions;
+            public string startedAtUtc, finishedAtUtc;
+            public List<string> completedTests = new List<string>();
+            public List<string> errors = new List<string>();
+            public List<string> generatedFiles = new List<string>();
+        }
+        static Result report;
+        static string outputFolder;
+        static readonly List<MainWindow> windows = new List<MainWindow>();
+        const BindingFlags PrivateInstance = BindingFlags.Instance | BindingFlags.NonPublic;
+
+        public static int Run(string[] args)
+        {
+            report = new Result { startedAtUtc = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture) };
+            outputFolder = Path.GetFullPath(args.Length > 1 ? args[1] : "work/ui-verification");
+            Directory.CreateDirectory(outputFolder);
+            try
+            {
+                Test("quick table starts with 168 unanswered cells and fits 1100px", DefaultsAndLayout);
+                Test("one click records an explicit zero and a second click clears it", OneClickAnswers);
+                Test("category changes targets without changing any answer", CategoryAndTargets);
+                Test("exclusion preserves answers and disables answer controls", ScopePreservesAnswers);
+                Test("copy source follows scope changes and undo is wired", CopyScopeAndUndo);
+                Test("detailed view stays accessible and manual changes survive undo", DetailedAndUndo);
+                Test("incomplete and search filters preserve answer data", Filters);
+                Test("all four pages build without the removed sidebar", AllPages);
+                Test("fast bundle exports and updates the preset ZIP without dialogs", FastBundle);
+                Test("opened bundle stays associated with ZIP for the next one click save", ReopenedBundle);
+                Test("empty scope disables the fast bundle button", EmptyScope);
+            }
+            finally
+            {
+                // Prevent the production close handler from asking to save test windows.
+                foreach (MainWindow window in windows) Set(window, "dirty", false);
+                report.finishedAtUtc = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture);
+                report.pass = report.errors.Count == 0;
+                string json = new JavaScriptSerializer { MaxJsonLength = 4 * 1024 * 1024 }.Serialize(report);
+                File.WriteAllText(Path.Combine(outputFolder, "ui-verification.json"), json, new UTF8Encoding(false));
+            }
+            return report.pass ? 0 : 1;
+        }
+        static void Test(string name, Action action)
+        {
+            report.tests++;
+            try { action(); report.completedTests.Add(name); }
+            catch (Exception ex)
+            {
+                while (ex is TargetInvocationException && ex.InnerException != null) ex = ex.InnerException;
+                report.errors.Add(name + ": " + ex.GetType().Name + ": " + ex.Message);
+            }
+        }
+        static void Assert(bool condition, string message)
+        {
+            report.assertions++; if (!condition) throw new InvalidOperationException(message);
+        }
+        static MainWindow Create(Assessment model)
+        {
+            MainWindow window = new MainWindow(model, false); windows.Add(window); Layout(window);
+            Assert(!window.IsVisible, "A test window became visible."); return window;
+        }
+        static void Layout(MainWindow window)
+        {
+            FrameworkElement content = (FrameworkElement)window.Content;
+            content.Width = 1100; content.Height = 760;
+            content.Measure(new Size(1100, 760)); content.Arrange(new Rect(0, 0, 1100, 760)); content.UpdateLayout();
+        }
+        static object Get(object target, string name)
+        {
+            FieldInfo field = target.GetType().GetField(name, PrivateInstance);
+            if (field == null) throw new MissingFieldException(target.GetType().Name, name);
+            return field.GetValue(target);
+        }
+        static void Set(object target, string name, object value)
+        {
+            FieldInfo field = target.GetType().GetField(name, PrivateInstance);
+            if (field == null) throw new MissingFieldException(target.GetType().Name, name);
+            field.SetValue(target, value);
+        }
+        static object Call(object target, string name, params object[] args)
+        {
+            MethodInfo method = target.GetType().GetMethod(name, PrivateInstance);
+            if (method == null) throw new MissingMethodException(target.GetType().Name, name);
+            return method.Invoke(target, args);
+        }
+        static List<QuickRowView> Rows(MainWindow window) { return (List<QuickRowView>)Get(window, "quickRows"); }
+        static void Click(Button button)
+        {
+            Assert(button.IsEnabled, "Attempted to invoke a disabled control.");
+            button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, button));
+        }
+        static Button AnswerButton(QuickAnswerCell cell, int criterion, double value)
+        {
+            int index = Array.FindIndex(Data.Criteria[criterion].Options, x => x.Value == value);
+            return ((Panel)cell.Child).Children.OfType<Button>().ElementAt(index);
+        }
+        static CheckBox Scope(QuickRowView row) { return row.Root.Children.OfType<CheckBox>().Single(); }
+        static string Answers(Assessment a) { return String.Join("|", a.Directions.Select(d => String.Join(",", d.Answers.Select(x => x.HasValue ? x.Value.ToString("R", CultureInfo.InvariantCulture) : "_")))); }
+        static IEnumerable<DependencyObject> Tree(DependencyObject root)
+        {
+            HashSet<DependencyObject> seen = new HashSet<DependencyObject>();
+            Stack<DependencyObject> pending = new Stack<DependencyObject>(); pending.Push(root);
+            while (pending.Count > 0)
+            {
+                DependencyObject current = pending.Pop(); if (!seen.Add(current)) continue; yield return current;
+                foreach (object child in LogicalTreeHelper.GetChildren(current)) { DependencyObject d = child as DependencyObject; if (d != null) pending.Push(d); }
+                if (current is Visual) for (int i = 0; i < VisualTreeHelper.GetChildrenCount(current); i++) pending.Push(VisualTreeHelper.GetChild(current, i));
+            }
+        }
+        static Button CopyButton(MainWindow window) { return Tree((DependencyObject)window.Content).OfType<Button>().Single(b => (b.Content as string ?? "").StartsWith("Повторить в пустых")); }
+        static ComboBox Source(MainWindow window) { return (ComboBox)Get(window, "quickCopySource"); }
+        static void Page(MainWindow window, string page) { Set(window, "page", page); Call(window, "ShowPage"); Layout(window); }
+
+        static void DefaultsAndLayout()
+        {
+            Assessment a = Assessment.Create(); MainWindow window = Create(a);
+            Assert((string)Get(window, "page") == "quick", "Quick assessment is not the initial page.");
+            Assert(Rows(window).Count == 21, "The quick table must contain 21 directions.");
+            Assert(Tree((DependencyObject)window.Content).OfType<QuickAnswerCell>().Count() == 168, "The attached control tree must contain 168 answer cells.");
+            Assert(a.Directions.All(d => d.Answers.All(x => !x.HasValue)), "Creating or measuring the UI filled answers.");
+            Assert(window.MinWidth <= 1100, "The declared minimum width exceeds 1100px.");
+            QuickRowView first = Rows(window)[0]; FrameworkElement content = (FrameworkElement)window.Content;
+            Rect targetBounds = first.Target.TransformToAncestor(content).TransformBounds(new Rect(new Point(), first.Target.RenderSize));
+            Assert(targetBounds.Right <= content.ActualWidth && targetBounds.Left >= 0, "The target column is clipped at 1100px.");
+        }
+        static void OneClickAnswers()
+        {
+            Assessment a = Assessment.Create(); MainWindow window = Create(a); QuickAnswerCell cell = Rows(window)[0].Cells[0];
+            Button zero = AnswerButton(cell, 0, 0); Click(zero);
+            Assert(a.Directions[0].Answers[0] == 0, "Clicking zero did not record an explicit answer.");
+            Assert(Calc.Summary(a).Answered == 1, "Explicit zero was not counted as answered.");
+            Click(zero); Assert(!a.Directions[0].Answers[0].HasValue, "The second click did not clear the answer.");
+            Click(AnswerButton(cell, 0, .5)); Click(AnswerButton(cell, 0, 1));
+            Assert(a.Directions[0].Answers[0] == 1, "Changing an answer did not replace the selected value.");
+            Click(AnswerButton(Rows(window)[0].Cells[5], 5, .3));
+            Assert(a.Directions[0].Answers[5] == .3, "The education criterion lost the 0.3 option.");
+            Assert(Calc.Summary(a).Answered == 2, "A click changed an unrelated answer.");
+        }
+        static void CategoryAndTargets()
+        {
+            Assessment a = Assessment.Create(); a.Directions[3].Answers[2] = .5;
+            MainWindow window = Create(a); string before = Answers(a);
+            ComboBox category = Tree((DependencyObject)window.Content).OfType<ComboBox>().Single(x => x.Items.Count == 4 && x.Items[0] is string);
+            category.SelectedIndex = 3;
+            Assert(a.Category == 3 && a.Directions.All(d => d.Target == 3), "Category 3 did not set all goals to 3.");
+            Assert(Answers(a) == before, "Changing category changed answers.");
+            Assert(Rows(window).All(r => !((ComboBoxItem)r.Target.Items[0]).IsEnabled && !((ComboBoxItem)r.Target.Items[1]).IsEnabled), "Goals below the category minimum remain enabled.");
+            Rows(window)[0].Target.SelectedIndex = 3;
+            Assert(a.Directions[0].Target == 4 && a.Directions.Skip(1).All(d => d.Target == 3), "An individual target changed another direction.");
+            category.SelectedIndex = 1;
+            Assert(a.Directions.All(d => d.Target == 1) && Answers(a) == before, "Lowering category failed to reset goals while preserving answers.");
+        }
+        static void ScopePreservesAnswers()
+        {
+            Assessment a = Assessment.Create(); a.Directions[0].Answers[0] = .5; MainWindow window = Create(a); QuickRowView row = Rows(window)[0];
+            Scope(row).IsChecked = false;
+            Assert(!a.Directions[0].Included && a.Directions[0].Answers[0] == .5, "Excluding a direction deleted its answers.");
+            Assert(row.Cells.All(c => !c.IsEnabled) && !row.Target.IsEnabled, "Excluded controls are still enabled.");
+            Assert(Calc.Summary(a).Total == 160, "Excluded direction is still in the summary denominator.");
+            Scope(row).IsChecked = true;
+            Assert(a.Directions[0].Answers[0] == .5 && Calc.Summary(a).Total == 168, "Reincluding failed to restore the preserved answer/scope.");
+        }
+        static void CopyScopeAndUndo()
+        {
+            Assessment a = Assessment.Create(); foreach (DirectionAssessment d in a.Directions) d.Included = false;
+            MainWindow window = Create(a);
+            Assert(Source(window).Items.Count == 21, "Source choices must retain all direction IDs while scope changes.");
+            Scope(Rows(window)[20]).IsChecked = true; Click(AnswerButton(Rows(window)[20].Cells[0], 0, 1));
+            Scope(Rows(window)[0]).IsChecked = true; Source(window).SelectedIndex = 20;
+            Assert(((ComboBoxItem)Source(window).SelectedItem).IsEnabled, "A newly included direction is missing from enabled sources.");
+            Click(CopyButton(window));
+            Assert(a.Directions[0].Answers[0] == 1 && a.Directions[20].Answers[0] == 1, "Copy did not use the newly included source.");
+            Assert(a.Directions.Skip(1).Take(19).All(d => !d.Answers[0].HasValue), "Copy modified excluded directions.");
+            Button undo = (Button)Get(window, "undoButton"); Assert(undo.Visibility == Visibility.Visible, "Undo is not offered after copying."); Click(undo);
+            Assert(!a.Directions[0].Answers[0].HasValue && a.Directions[20].Answers[0] == 1, "Undo changed the source or failed to clear copied answers.");
+        }
+        static void DetailedAndUndo()
+        {
+            Assessment a = Assessment.Create(); a.Directions[0].Answers[0] = 1; MainWindow window = Create(a); Click(CopyButton(window));
+            Rows(window)[1].Root.Children.OfType<Button>().Single().RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Layout(window);
+            Assert((string)Get(window, "page") == "assessment" && (int)Get(window, "selected") == 1, "The direction name did not open its detailed view.");
+            List<RadioButton[]> radios = (List<RadioButton[]>)Get(window, "answerRadios");
+            Assert(radios.Count == 8, "Detailed assessment no longer exposes eight criteria.");
+            radios[0][1].IsChecked = true;
+            Assert(a.Directions[1].Answers[0] == .5, "Detailed radio did not update the shared model.");
+            Click((Button)Get(window, "undoButton"));
+            Assert(a.Directions[1].Answers[0] == .5, "Undo discarded a manual detailed-view edit.");
+            Assert(a.Directions.Skip(2).All(d => !d.Answers[0].HasValue), "Undo did not clear untouched copied answers.");
+            Click((Button)Get(window, "navAssess")); Layout(window);
+            Assert((string)Get(window, "page") == "quick" && Rows(window).Count == 21, "Returning to the matrix failed.");
+        }
+        static void Filters()
+        {
+            Assessment a = Assessment.Create(); a.Directions[0].Answers = Enumerable.Repeat((double?)0, 8).ToArray(); MainWindow window = Create(a); string before = Answers(a);
+            CheckBox pending = Tree((DependencyObject)window.Content).OfType<CheckBox>().Single(c => c.Content as string == "Только незаполненные"); pending.IsChecked = true;
+            Assert(Rows(window)[0].Root.Visibility == Visibility.Collapsed && Rows(window)[1].Root.Visibility == Visibility.Visible, "Incomplete filter hides the wrong directions.");
+            ((TextBox)Get(window, "search")).Text = "21";
+            Assert(Rows(window).Count(r => r.Root.Visibility == Visibility.Visible) == 1 && Rows(window)[20].Root.Visibility == Visibility.Visible, "Direction search is incorrect.");
+            Assert(Answers(a) == before, "Filtering changed answer data.");
+        }
+        static void AllPages()
+        {
+            Assessment a = Assessment.Create(); MainWindow window = Create(a); string before = Answers(a);
+            foreach (string page in new[] { "assessment", "results", "settings", "quick" }) { Page(window, page); Assert(!window.IsVisible, "Page rendering showed a window."); }
+            Assert(Answers(a) == before, "Changing pages filled answers.");
+            Assert(Rows(window).Count == 21, "The quick page failed after visiting legacy pages.");
+        }
+        static void FastBundle()
+        {
+            Assessment a = Assessment.Create(); a.Organization = "Тестовая организация"; a.SystemName = "Тестовая система"; a.Assessor = "Тестовый составитель";
+            MainWindow window = Create(a); string path = Path.Combine(outputFolder, "ui-bundle.zip"); Set(window, "bundlePath", path);
+            Call(window, "SaveBundleFast", false);
+            Assert(File.Exists(path), "Fast save did not create the preset bundle.");
+            using (ZipArchive zip = ZipFile.OpenRead(path))
+            {
+                Assert(zip.Entries.Count == 4 && zip.GetEntry("01 Проект.uzi.json") != null && zip.GetEntry("02 Отчёт.docx") != null && zip.GetEntry("03 Таблица.xlsx") != null && zip.GetEntry("Состав комплекта.txt") != null, "Fast bundle does not contain the project and both reports.");
+            }
+            a.Directions[0].Answers[0] = 1; Call(window, "SaveBundleFast", false);
+            using (ZipArchive zip = ZipFile.OpenRead(path))
+            using (StreamReader reader = new StreamReader(zip.GetEntry("01 Проект.uzi.json").Open(), Encoding.UTF8))
+                Assert(Store.Parse(reader.ReadToEnd()).Directions[0].Answers[0] == 1, "A repeat fast save did not update the existing bundle.");
+            Assert(((Button)Get(window, "bundleButton")).Content as string == "Обновить комплект", "The fast save button did not change to update mode.");
+            report.generatedFiles.Add(path);
+        }
+        static void ReopenedBundle()
+        {
+            string path = Path.Combine(outputFolder, "ui-reopened-bundle.zip");
+            Assessment initial = Assessment.Create(); initial.Organization = "Открытие комплекта"; initial.Directions[0].Answers[0] = 0;
+            ProjectTools.ExportBundle(initial, path, false, false);
+            Assessment loaded = ProjectTools.LoadAssessmentFile(path); MainWindow window = Create(loaded); window.SetProjectPath(path);
+            Assert(Get(window, "projectPath") == null && (string)Get(window, "bundlePath") == path, "Opening ZIP incorrectly associates it with the JSON save path.");
+            Assert(((Button)Get(window, "bundleButton")).Content as string == "Обновить комплект", "Reopened ZIP is not ready for a one click update.");
+            Click(AnswerButton(Rows(window)[0].Cells[0], 0, .5));
+            Assert((bool)Get(window, "dirty"), "Editing a reopened bundle did not mark the assessment changed.");
+            Assert((bool)Call(window, "SaveBundleFast", false), "Updating a reopened bundle failed.");
+            Assert(!(bool)Get(window, "dirty") && ProjectTools.LoadAssessmentFile(path).Directions[0].Answers[0] == .5, "Bundle update lost answers or retained an unnecessary unsaved flag.");
+            string project = Path.Combine(outputFolder, "separate.uzi.json"); window.SetProjectPath(project);
+            Assert((string)Get(window, "projectPath") == project && Get(window, "bundlePath") == null, "Switching to a JSON file retained the old bundle association.");
+            report.generatedFiles.Add(path);
+        }
+        static void EmptyScope()
+        {
+            Assessment a = Assessment.Create(); foreach (DirectionAssessment d in a.Directions) d.Included = false; MainWindow window = Create(a);
+            Assert(!((Button)Get(window, "bundleButton")).IsEnabled, "Fast save is enabled for an empty assessment scope.");
+            Assert(a.Directions.All(d => d.Answers.All(x => !x.HasValue)), "Empty-scope UI populated answers.");
+        }
+    }
+}

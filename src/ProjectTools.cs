@@ -22,6 +22,47 @@ namespace MaturityApp
         static readonly UTF8Encoding Utf8 = new UTF8Encoding(false);
         static readonly string[] ProfileFields = { "Organization", "OrganizationShort", "OrganizationAddress", "City", "Assessor", "AssessorPosition", "ApproverName", "ApproverPosition" };
 
+        public static Assessment LoadAssessmentFile(string path)
+        {
+            if (!String.Equals(Path.GetExtension(path), ".zip", StringComparison.OrdinalIgnoreCase)) return Store.Load(path);
+            const int maximumProjectBytes = 4 * 1024 * 1024;
+            try
+            {
+                using (FileStream file = File.OpenRead(path))
+                using (ZipArchive archive = new ZipArchive(file, ZipArchiveMode.Read, false, Encoding.UTF8))
+                {
+                    ZipArchiveEntry project = null;
+                    foreach (ZipArchiveEntry entry in archive.Entries)
+                    {
+                        if (!String.Equals(entry.FullName, "01 Проект.uzi.json", StringComparison.Ordinal)) continue;
+                        if (project != null) throw new InvalidDataException("В комплекте найдено несколько файлов «01 Проект.uzi.json».");
+                        project = entry;
+                    }
+                    if (project == null) throw new InvalidDataException("В комплекте отсутствует файл «01 Проект.uzi.json».");
+                    if (project.Length < 0 || project.Length > maximumProjectBytes) throw new InvalidDataException("Проект внутри комплекта превышает допустимый размер 4 МБ.");
+                    using (Stream input = project.Open())
+                    using (MemoryStream data = new MemoryStream())
+                    {
+                        byte[] buffer = new byte[8192];
+                        int total = 0, read;
+                        // Read at most the limit plus one byte, even if the ZIP directory lies about entry.Length.
+                        while ((read = input.Read(buffer, 0, Math.Min(buffer.Length, maximumProjectBytes - total + 1))) > 0)
+                        {
+                            total += read;
+                            if (total > maximumProjectBytes) throw new InvalidDataException("Проект внутри комплекта превышает допустимый размер 4 МБ.");
+                            data.Write(buffer, 0, read);
+                        }
+                        if (total != project.Length) throw new InvalidDataException("Размер проекта внутри комплекта не соответствует данным архива.");
+                        string json = new UTF8Encoding(false, true).GetString(data.ToArray());
+                        if (json.Length > 0 && json[0] == '\uFEFF') json = json.Substring(1);
+                        return Store.Parse(json);
+                    }
+                }
+            }
+            catch (InvalidDataException) { throw; }
+            catch (Exception ex) { throw new InvalidDataException("Не удалось открыть комплект: архив или содержащийся в нём проект повреждён.", ex); }
+        }
+
         public static string[] Preflight(Assessment a)
         {
             return CollectPreflight(Snapshot(a));
