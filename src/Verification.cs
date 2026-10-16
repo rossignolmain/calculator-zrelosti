@@ -27,6 +27,7 @@ namespace MaturityApp
         {
             public bool pass;
             public int referenceCaseCount, referenceAssertions, additionalTests, additionalAssertions, assertionCount;
+            public int bulkTestCount, bulkAssertionCount;
             public string startedAtUtc, finishedAtUtc, referenceFile;
             public Dictionary<string, int> referenceLevelCounts = new Dictionary<string, int>();
             public List<string> errors = new List<string>();
@@ -60,6 +61,11 @@ namespace MaturityApp
                 VerifyProjectTools();
                 VerifyQuickInput();
                 VerifyBundleLoading();
+                Test("mass entry regression suite", BulkVerification.Run);
+                report.bulkTestCount = BulkVerification.TestCount;
+                report.bulkAssertionCount = BulkVerification.AssertionCount;
+                report.assertionCount += report.bulkAssertionCount;
+                VerifyAnalysis();
                 Test("sample reports and saved assessment", CreateSampleReports);
             }
             catch (Exception ex) { report.errors.Add("Verification infrastructure: " + ex.GetType().Name + ": " + ex.Message); }
@@ -763,6 +769,148 @@ namespace MaturityApp
             try { current = ProjectTools.LoadAssessmentFile(path); } catch (InvalidDataException) { rejected = true; }
             Check(rejected, label + " must throw InvalidDataException");
             Check(Store.Serialize(current) == before, label + " must preserve current assessment state");
+        }
+        static void VerifyAnalysis()
+        {
+            Test("criterion profiles average answered values only and expose coverage", delegate
+            {
+                Assessment a = Assessment.Create(); foreach (DirectionAssessment d in a.Directions) d.Included = false;
+                for (int i = 0; i < 3; i++) a.Directions[i].Included = true;
+                a.Directions[0].Answers[0] = 0; a.Directions[1].Answers[0] = 1;
+                a.Directions[0].Answers[5] = 0; a.Directions[1].Answers[5] = .3;
+                a.Directions[3].Answers[0] = 1;
+                AssessmentAnalysis analysis = Analysis.Build(a);
+                CriterionProfile documentation = analysis.Criteria[0], training = analysis.Criteria[5];
+                Check(analysis.Included == 3 && analysis.Answered == 4 && analysis.Total == 24 && !analysis.Complete && analysis.HasScope, "Analysis scope and completeness match actual included answers");
+                Check(documentation.Answered == 2 && documentation.Missing == 1 && documentation.ZeroCount == 1, "Known zero counts as answered while missing and excluded cells do not");
+                Equal(documentation.Average.Value, .5, "Documentation mean excludes unanswered and excluded directions");
+                Equal(documentation.WeightedAverage.Value, .075, "Weighted criterion mean");
+                Equal(documentation.Coverage, 2.0 / 3, "Criterion coverage");
+                Equal(training.Average.Value, .15, "Training mean includes explicit zero and episodic 0.3");
+                Check(!analysis.Criteria[2].Average.HasValue && !analysis.Criteria[2].WeightedAverage.HasValue && analysis.Criteria[2].Answered == 0, "An entirely unanswered criterion has no invented zero average");
+            });
+            Test("analysis separates factual target deficits unknown required data and optional unknowns", delegate
+            {
+                Assessment a = WithLevels(0); a.Directions[0].Target = 3;
+                a.Directions[0].Answers[5] = null; a.Directions[0].Answers[6] = null;
+                AssessmentAnalysis analysis = Analysis.Build(a);
+                DeficitRecord training = analysis.Deficits.Single(d => d.CriterionIndex == 5);
+                DeficitRecord audit = analysis.Deficits.Single(d => d.CriterionIndex == 6);
+                Check(training.Type == "assess" && training.Action == "Оценить" && !training.Current.HasValue && training.Required == .5 && training.BlockingTarget, "Required unknown training is a request to assess rather than asserted absence");
+                Check(audit.Type == "assess" && audit.Action == "Оценить" && !audit.Required.HasValue && !audit.BlockingTarget, "Unknown criterion with no target minimum does not recommend a zero answer");
+                DeficitRecord documentation = analysis.Deficits.Single(d => d.CriterionIndex == 0);
+                Check(documentation.Type == "improve" && documentation.Current == 0 && documentation.Required == 1 && documentation.BlockingTarget, "Confirmed low documentation is a factual target deficit");
+                Check(analysis.Deficits.Count(d => d.Type == "score") == 1 && analysis.Deficits.Single(d => d.Type == "score").CriterionIndex == null, "Weighted score shortfall is a distinct diagnostic record");
+                Check(analysis.GroupedActions.All(g => g.Type != "score"), "Score diagnostic is not counted as duplicate work alongside concrete criterion tasks");
+                Check(analysis.Criteria[0].KnownDeficits == 1 && analysis.Criteria[5].RequiredUnknown == 1, "Profiles distinguish confirmed deficits from required data gaps");
+                Check(analysis.Deficits.All(d => d.DirectionId == 1), "Excluded directions create no target or data tasks");
+            });
+            Test("strong totals cannot hide mandatory criterion deficits", delegate
+            {
+                Assessment a = WithLevels(4);
+                a.Directions[0].Answers = new double?[] { 0, 1, 1, 1, 1, 1, 1, 1 }; a.Directions[0].Target = 1;
+                AssessmentAnalysis analysis = Analysis.Build(a);
+                Check(analysis.Deficits.Length == 1 && analysis.Deficits[0].CriterionIndex == 0 && analysis.Deficits[0].Required == .5, "High total with missing documentation still produces its mandatory deficit");
+                Check(analysis.Directions[0].Next.ProjectedLevel == 2 && analysis.Directions[0].Next.ChangedCriteria == 1, "Minimal next-level correction can surpass the requested next level without lowering stronger answers");
+                a.Directions[0].Answers = new double?[] { 1, 1, 1, 1, 1, .3, 1, 1 }; a.Directions[0].Target = 3;
+                analysis = Analysis.Build(a);
+                Check(analysis.Deficits.Length == 1 && analysis.Deficits[0].CriterionIndex == 5 && analysis.Deficits[0].Required == .5, "Training 0.3 requires 0.5 to reach target three despite a high total");
+                a.Directions[0].Answers = new double?[] { 1, 1, 1, 1, 1, 1, .5, 1 }; a.Directions[0].Target = 4;
+                analysis = Analysis.Build(a);
+                Check(analysis.Deficits.Length == 1 && analysis.Deficits[0].CriterionIndex == 6 && analysis.Deficits[0].Required == 1, "Target four identifies regular external audit rather than generic score improvement");
+            });
+            Test("already attained target and incomplete data remain distinct", delegate
+            {
+                Assessment a = WithLevels(3); a.Directions[0].Target = 3;
+                a.Directions[0].Answers[6] = null; a.Directions[0].Answers[7] = null;
+                AssessmentAnalysis analysis = Analysis.Build(a); DirectionRoadmap direction = analysis.Directions[0];
+                Check(direction.CurrentLevel == 3 && !direction.Complete && !analysis.Complete, "The provisional attained level remains three while data are incomplete");
+                Check(direction.Target.ChangedCriteria == 0 && direction.Target.ProjectedLevel == 3, "Attained target does not trigger invented improvements");
+                Check(analysis.Deficits.Length == 2 && analysis.Deficits.All(d => d.Type == "assess" && !d.BlockingTarget && !d.Required.HasValue), "Remaining optional unknowns are only requests to assess");
+                Check(direction.Next.Level == 4 && direction.Next.ChangedCriteria == 3 && direction.Next.KnownChanges == 1 && direction.Next.UnknownChanges == 2, "Next level distinguishes the known training improvement and two unknown requirements");
+            });
+            Test("roadmaps preserve strong facts and do not assert unobserved improvements", delegate
+            {
+                DirectionAssessment unknown = new DirectionAssessment { Id = 1 };
+                LevelRoadmap roadmap = Analysis.BuildRoadmap(unknown, 1);
+                Check(roadmap.ChangedCriteria == 3 && roadmap.KnownChanges == 0 && roadmap.UnknownChanges == 3 && roadmap.Preliminary, "Blank source produces three required assessments rather than confirmed process failures");
+                Check(roadmap.Changes.All(c => c.NeedsAssessment && !c.Current.HasValue && c.Required == .5), "Unknown required conditions are explicit hypotheses");
+                Equal(roadmap.ProjectedScore, .225, "Conditional lower-bound score for level one");
+                unknown.Answers[0] = 1;
+                roadmap = Analysis.BuildRoadmap(unknown, 1);
+                Check(roadmap.ChangedCriteria == 2 && roadmap.Changes.All(c => c.CriterionIndex != 0), "Already stronger documentation is preserved");
+                Equal(roadmap.ProjectedScore, .3, "Projection retains the stronger existing documentation contribution");
+                Check(unknown.Answers[0] == 1 && unknown.Answers.Skip(1).All(x => !x.HasValue), "Scenario calculation never applies its proposed answers");
+            });
+            Test("grouped actions use factual scope distinguish goals and leave owner deadline empty", delegate
+            {
+                Assessment a = WithLevels(0, 0, 4);
+                AssessmentAnalysis analysis = Analysis.Build(a);
+                Check(analysis.GroupedActions.Length == 3, "Identical concrete deficits group into three reusable actions");
+                Check(analysis.GroupedActions.All(g => g.DirectionIds.SequenceEqual(new[] { 1, 2 }) && g.DirectionCount == 2 && g.Owner == "" && g.Deadline == ""), "Grouped scope is exact with no fictional responsible person or deadline");
+                Check(analysis.GroupedActions[0].CriterionIndex == 1 && analysis.GroupedActions[0].Priority == 1, "Equal-coverage known deficits are ordered by criterion weight");
+                Check(analysis.GroupedActions.Select(g => g.Priority).SequenceEqual(Enumerable.Range(1, 3)), "Priority ranks are deterministic and contiguous");
+                a.Directions[1].Target = 3;
+                analysis = Analysis.Build(a);
+                GroupedAction[] documentation = analysis.GroupedActions.Where(g => g.CriterionIndex == 0).ToArray();
+                Check(documentation.Length == 2 && documentation.Any(g => g.Required == .5) && documentation.Any(g => g.Required == 1), "Different required target grades are not collapsed into a misleading single condition");
+                a.Directions[0].Answers[0] = null; a.Directions[0].Answers[6] = null;
+                analysis = Analysis.Build(a);
+                Check(analysis.GroupedActions[0].Type == "assess" && analysis.GroupedActions[0].BlockingTarget, "Unknown required conditions are reviewed before improvement decisions");
+                Check(analysis.GroupedActions.Last().Type == "assess" && !analysis.GroupedActions.Last().BlockingTarget, "Nonblocking missing data remain distinct from mandatory improvement work");
+            });
+            Test("zero-scope analysis has no averages fabricated tasks or roadmaps", delegate
+            {
+                Assessment a = WithLevels(); a.Directions[0].Answers = NullableAnswers(Representatives[4]);
+                AssessmentAnalysis analysis = Analysis.Build(a);
+                Check(!analysis.HasScope && !analysis.Complete && analysis.Included == 0 && analysis.Answered == 0 && analysis.Total == 0, "Zero-scope aggregate state");
+                Check(analysis.Criteria.All(c => !c.Average.HasValue && c.Answered == 0 && c.Coverage == 0), "Excluded answers do not create criterion averages");
+                Check(analysis.Deficits.Length == 0 && analysis.GroupedActions.Length == 0 && analysis.Directions.All(d => d.Next == null && d.Target == null), "Zero scope produces no assess or improve tasks and no active roadmaps");
+            });
+            Test("analysis is read only including order null metadata answers and references", delegate
+            {
+                Assessment a = WithLevels(0, 2, 4); a.Organization = null; a.Directions = a.Directions.Reverse().ToArray();
+                a.Directions[0].Evidence = null;
+                DirectionAssessment[] directionReferences = a.Directions.ToArray(); double?[][] answerReferences = a.Directions.Select(d => d.Answers).ToArray();
+                string before = Store.Serialize(a);
+                Analysis.Build(a);
+                Check(Store.Serialize(a) == before, "Analysis does not normalize or reorder the edited assessment");
+                Check(a.Directions.Select((d, i) => Object.ReferenceEquals(d, directionReferences[i]) && Object.ReferenceEquals(d.Answers, answerReferences[i])).All(x => x), "Analysis never replaces original direction or answer objects");
+                a.Directions[0].Answers[0] = .25; before = Store.Serialize(a); bool rejected = false;
+                try { Analysis.Build(a); } catch { rejected = true; }
+                Check(rejected && Store.Serialize(a) == before, "Invalid analytical input is rejected without altering it");
+            });
+            Test("minimal roadmaps agree with independent exhaustive original calculator cases", delegate
+            {
+                ReferenceSet reference = new JavaScriptSerializer { MaxJsonLength = 16 * 1024 * 1024 }.Deserialize<ReferenceSet>(File.ReadAllText(report.referenceFile, Encoding.UTF8));
+                double[][] sources = {
+                    Representatives[0], Representatives[1], Representatives[3],
+                    new double[] { 0, 1, 1, 1, 1, 1, 1, 1 },
+                    new double[] { 1, 1, 1, 1, 1, .3, 1, 1 },
+                    new double[] { 1, 1, 1, 1, 1, 1, 1, 1 }
+                };
+                foreach (double[] source in sources) for (int target = 1; target <= 4; target++)
+                {
+                    LevelRoadmap roadmap = Analysis.BuildRoadmap(Direction(source), target);
+                    int minimumCount = Int32.MaxValue; double minimumScore = Double.PositiveInfinity;
+                    foreach (ReferenceCase candidate in reference.cases)
+                    {
+                        if (candidate.level < target) continue;
+                        bool raisesOnly = true; int changed = 0;
+                        for (int criterion = 0; criterion < 8; criterion++)
+                        {
+                            if (candidate.a[criterion] < source[criterion] - 1e-9) { raisesOnly = false; break; }
+                            if (Math.Abs(candidate.a[criterion] - source[criterion]) > 1e-9) changed++;
+                        }
+                        if (!raisesOnly) continue;
+                        if (changed < minimumCount) { minimumCount = changed; minimumScore = candidate.p; }
+                        else if (changed == minimumCount && candidate.p < minimumScore) minimumScore = candidate.p;
+                    }
+                    Check(roadmap.ChangedCriteria == minimumCount, "Roadmap changes the minimum possible number of known criteria for target " + target);
+                    Equal(roadmap.ProjectedScore, minimumScore, "Roadmap is the smallest upward grade adjustment among minimum-change independent solutions for target " + target);
+                    Check(roadmap.ProjectedLevel >= target && roadmap.Changes.All(c => c.Current.HasValue && c.Proposed > c.Current.Value), "Complete-input roadmap reaches target by increasing facts only");
+                }
+            });
         }
         static string ReadZipText(ZipArchiveEntry entry)
         {

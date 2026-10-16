@@ -22,8 +22,9 @@ namespace MaturityApp
         {
             if (a == null) throw new ArgumentNullException("a");
             Summary summary = Calc.Summary(a);
+            AssessmentAnalysis analysis = Analysis.Build(a);
             byte[] chart = ChartPng(a);
-            string doc = WordDocument(a, summary);
+            string doc = WordDocument(a, summary, analysis);
             AtomicWrite(path, delegate(Stream output)
             {
                 using (ZipArchive zip = new ZipArchive(output, ZipArchiveMode.Create, true))
@@ -45,19 +46,19 @@ namespace MaturityApp
         {
             if (a == null) throw new ArgumentNullException("a");
             Summary summary = Calc.Summary(a);
-            string sheet1 = SummarySheet(a, summary), sheet2 = AnswersSheet(a), sheet3 = RecommendationsSheet(a);
+            AssessmentAnalysis analysis = Analysis.Build(a);
+            string[] names = { "Сводка", "Ответы", "Рекомендации", "Профиль критериев", "План улучшений", "Общие дефициты" };
+            string[] sheets = { SummarySheet(a, summary), AnswersSheet(a), RecommendationsSheet(a), CriterionProfileSheet(analysis), DeficitPlanSheet(analysis), GroupedActionsSheet(analysis) };
             AtomicWrite(path, delegate(Stream output)
             {
                 using (ZipArchive zip = new ZipArchive(output, ZipArchiveMode.Create, true))
                 {
-                    Add(zip, "[Content_Types].xml", "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/><Override PartName=\"/xl/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml\"/><Override PartName=\"/xl/worksheets/sheet1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/><Override PartName=\"/xl/worksheets/sheet2.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/><Override PartName=\"/xl/worksheets/sheet3.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/><Override PartName=\"/docProps/core.xml\" ContentType=\"application/vnd.openxmlformats-package.core-properties+xml\"/><Override PartName=\"/docProps/app.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.extended-properties+xml\"/></Types>");
+                    Add(zip, "[Content_Types].xml", SpreadsheetContentTypes(sheets.Length));
                     Add(zip, "_rels/.rels", PackageRels("xl/workbook.xml", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument"));
-                    Add(zip, "xl/workbook.xml", "<?xml version=\"1.0\" encoding=\"UTF-8\"?><workbook xmlns=\"" + NsSheet + "\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><bookViews><workbookView/></bookViews><sheets><sheet name=\"Сводка\" sheetId=\"1\" r:id=\"r1\"/><sheet name=\"Ответы\" sheetId=\"2\" r:id=\"r2\"/><sheet name=\"Рекомендации\" sheetId=\"3\" r:id=\"r3\"/></sheets><calcPr calcId=\"191029\" fullCalcOnLoad=\"1\"/></workbook>");
-                    Add(zip, "xl/_rels/workbook.xml.rels", "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"r1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet1.xml\"/><Relationship Id=\"r2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet2.xml\"/><Relationship Id=\"r3\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet3.xml\"/><Relationship Id=\"rStyles\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/></Relationships>");
+                    Add(zip, "xl/workbook.xml", WorkbookXml(names));
+                    Add(zip, "xl/_rels/workbook.xml.rels", WorkbookRelationships(sheets.Length));
                     Add(zip, "xl/styles.xml", ExcelStyles());
-                    Add(zip, "xl/worksheets/sheet1.xml", sheet1);
-                    Add(zip, "xl/worksheets/sheet2.xml", sheet2);
-                    Add(zip, "xl/worksheets/sheet3.xml", sheet3);
+                    for (int i = 0; i < sheets.Length; i++) Add(zip, "xl/worksheets/sheet" + (i + 1) + ".xml", sheets[i]);
                     Add(zip, "docProps/core.xml", CoreProperties("Оценка зрелости информационной безопасности", a.Assessor));
                     Add(zip, "docProps/app.xml", AppProperties());
                 }
@@ -119,7 +120,7 @@ namespace MaturityApp
             }
         }
 
-        private static string WordDocument(Assessment a, Summary s)
+        private static string WordDocument(Assessment a, Summary s, AssessmentAnalysis analysis)
         {
             StringBuilder b = new StringBuilder("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><w:document xmlns:w=\"" + NsWord + "\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:pic=\"http://schemas.openxmlformats.org/drawingml/2006/picture\"><w:body>");
             b.Append(P("ОЦЕНКА ЗРЕЛОСТИ", "Title"));
@@ -178,7 +179,8 @@ namespace MaturityApp
                 for (int n = 0; n < r.Recommendations.Count; n++) b.Append(P((n + 1) + ". " + r.Recommendations[n], null));
             }
             if (!any) b.Append(P("По введённым данным дополнительных рекомендаций нет. Сохраняйте доказательства и периодически пересматривайте оценку.", null));
-            b.Append(P("4. Основание и ограничения", "Heading1"));
+            AppendAnalysisWord(b, analysis);
+            b.Append(P("7. Основание и ограничения", "Heading1"));
             b.Append(P(MethodNote(), "Small"));
             b.Append(P("Источник: " + Data.SourceUrl + ". Дата версии методики: " + Data.MethodDate + ".", "Small"));
             if (!String.IsNullOrWhiteSpace(a.Assessor) || !String.IsNullOrWhiteSpace(a.AssessorPosition) || !String.IsNullOrWhiteSpace(a.ApproverName) || !String.IsNullOrWhiteSpace(a.ApproverPosition))
@@ -191,6 +193,129 @@ namespace MaturityApp
             }
             b.Append("<w:sectPr><w:footerReference w:type=\"default\" r:id=\"rFooter\"/><w:pgSz w:w=\"11906\" w:h=\"16838\"/><w:pgMar w:top=\"1000\" w:right=\"850\" w:bottom=\"1000\" w:left=\"1000\" w:header=\"400\" w:footer=\"400\"/><w:cols w:space=\"708\"/></w:sectPr></w:body></w:document>");
             return b.ToString();
+        }
+
+        private static void AppendAnalysisWord(StringBuilder b, AssessmentAnalysis analysis)
+        {
+            b.Append(PageBreak());
+            b.Append(P("4. Профиль критериев", "Heading1"));
+            b.Append(P("Средняя оценка рассчитана только по заполненным ответам включённых направлений. Пропуски не входят в среднее; выбранный 0 входит. Эти средние не являются показателем зрелости Узи. Покрытие показывает долю направлений с ответом по критерию. Известные дефициты учитывают выбранные оценки ниже требуемого минимума; пропуски показаны отдельно.", "Small"));
+            b.Append(TableStart(new int[] { 400, 3200, 1100, 1300, 1300, 2000 }));
+            b.Append(TableRow(new string[] { "№", "Критерий", "Средняя оценка", "Ответы / включено", "Покрытие, %", "Известные дефициты" }, true));
+            foreach (CriterionProfile c in analysis.Criteria)
+                b.Append(TableRow(new string[] { (c.CriterionIndex + 1).ToString(Inv), c.Name, NullableNumber(c.Average), c.Answered + " / " + c.Included, (c.Coverage * 100).ToString("0.##", Inv), c.KnownDeficits.ToString(Inv) }, false));
+            b.Append("</w:tbl>");
+            if (!analysis.HasScope) b.Append(P("Нет включённых направлений. Для расчёта профиля включите направления и заполните ответы.", "Warning"));
+
+            b.Append(P("5. План достижения целевых уровней", "Heading1"));
+            b.Append(P("План сформирован из текущих ответов и целевого уровня каждого направления. «Оценить» означает проверить фактическое состояние и выбрать подтверждённый ответ. «Улучшить» означает выполнить указанное условие и подтвердить результат. Исполнитель и срок оставлены для заполнения. Пропуск при нулевом минимуме не требует выставлять 0 и отдельно помечен как не влияющий на минимум цели.", "Small"));
+            b.Append(P("Строки «Порог P» показывают контрольный суммарный показатель. Это не отдельные работы сверх мероприятий по критериям: в текущей таблице 3 сумма обязательных минимумов равна порогу P.", "Small"));
+            if (analysis.Deficits.Length == 0)
+                b.Append(P(analysis.HasScope ? "Недостатков и незаполненных ответов по включённым направлениям не выявлено." : "План не сформирован: нет включённых направлений.", null));
+            else
+            {
+                b.Append(TableStart(new int[] { 450, 2400, 1250, 1100, 3000, 1100 }));
+                b.Append(TableRow(new string[] { "№", "Направление и критерий", "Сейчас / требуется", "Тип", "Полное условие и мероприятие", "Исполнитель / срок" }, true));
+                for (int i = 0; i < analysis.Deficits.Length; i++)
+                {
+                    DeficitRecord d = analysis.Deficits[i];
+                    string target = "Сейчас: " + NullableNumber(d.Current) + "\nТребуется: " + NullableNumber(d.Required);
+                    string type = ActionLabel(d.Type) + (d.BlockingTarget ? "\nВлияет на цель" : "\nНе влияет на минимум цели");
+                    b.Append(TableRow(new string[] { (i + 1).ToString(Inv), d.DirectionId + ". " + d.DirectionName + "\n" + d.CriterionName, target, type, ConditionAndAction(d.ConditionText, d.Action), "Исполнитель:\n____________\nСрок:\n____________" }, false));
+                }
+                b.Append("</w:tbl>");
+            }
+
+            b.Append(P("6. Общие дефициты", "Heading1"));
+            b.Append(P("Одинаковые требования сгруппированы по критерию, типу действия и требуемой оценке. Число направлений помогает выбрать общие мероприятия. Номера соответствуют сводной таблице; результат и подтверждающие материалы проверяются по каждому направлению.", "Small"));
+            b.Append(P(Analysis.PriorityExplanation, "Small"));
+            if (analysis.GroupedActions.Length == 0) b.Append(P("Общих мероприятий по введённым данным нет.", null));
+            else
+            {
+                b.Append(TableStart(new int[] { 450, 2200, 1300, 800, 1500, 3050 }));
+                b.Append(TableRow(new string[] { "Приоритет", "Критерий", "Тип / требуется", "Направлений", "№ направлений", "Полное условие и мероприятие" }, true));
+                foreach (GroupedAction g in analysis.GroupedActions)
+                    b.Append(TableRow(new string[] { g.Priority.ToString(Inv), g.CriterionName, ActionLabel(g.Type) + "\n" + NullableNumber(g.Required), g.DirectionCount.ToString(Inv), DirectionNumbers(g.DirectionIds), ConditionAndAction(g.ConditionText, g.Action) + (g.BlockingTarget ? "" : "\nНе влияет на минимум цели.") }, false));
+                b.Append("</w:tbl>");
+            }
+        }
+
+        private static string CriterionProfileSheet(AssessmentAnalysis analysis)
+        {
+            StringBuilder rows = new StringBuilder();
+            rows.Append(Row(1, T("A1", "ПРОФИЛЬ ВОСЬМИ КРИТЕРИЕВ", 1), 30));
+            rows.Append(Row(2, T("A2", "Средние рассчитаны только по заполненным ответам включённых направлений и не являются показателем зрелости Узи. Пропуски не входят в среднее; выбранный 0 входит. Покрытие = ответы / включённые направления. Известные дефициты — выбранные оценки ниже требуемого минимума; пропуски показаны отдельно.", 5), 58));
+            rows.Append(Row(4, HeaderCells(new string[] { "№", "Критерий", "Вес", "Средняя оценка", "Средняя взвешенная", "Ответов", "Включено", "Пропусков", "Нулевых ответов", "Покрытие, %", "Известные дефициты" }, 4), 42));
+            int row = 5;
+            foreach (CriterionProfile c in analysis.Criteria)
+            {
+                rows.Append(Row(row, N("A" + row, c.CriterionIndex + 1, 3) + T("B" + row, c.Name, 0) + N("C" + row, c.Weight, 2) + OptionalNumber("D" + row, c.Average) + OptionalNumber("E" + row, c.WeightedAverage) + N("F" + row, c.Answered, 3) + N("G" + row, c.Included, 3) + N("H" + row, c.Missing, 3) + N("I" + row, c.ZeroCount, 3) + N("J" + row, c.Coverage * 100, 2) + N("K" + row, c.KnownDeficits, 3), 48));
+                row++;
+            }
+            return Sheet(rows, "A1:K" + (row - 1), "<col min=\"1\" max=\"1\" width=\"8\" customWidth=\"1\"/><col min=\"2\" max=\"2\" width=\"42\" customWidth=\"1\"/><col min=\"3\" max=\"3\" width=\"10\" customWidth=\"1\"/><col min=\"4\" max=\"5\" width=\"17\" customWidth=\"1\"/><col min=\"6\" max=\"11\" width=\"14\" customWidth=\"1\"/>", 4, "A4:K" + (row - 1), TwoTitleMerges("K"), true);
+        }
+
+        private static string DeficitPlanSheet(AssessmentAnalysis analysis)
+        {
+            StringBuilder rows = new StringBuilder();
+            rows.Append(Row(1, T("A1", "ПЛАН ДОСТИЖЕНИЯ ЦЕЛЕВЫХ УРОВНЕЙ", 1), 30));
+            rows.Append(Row(2, T("A2", "«Оценить» — проверить фактическое состояние и выбрать подтверждённый ответ. «Улучшить» — выполнить условие и подтвердить результат. Пропуск при нулевом минимуме не требует выставлять 0. Строки «Порог P» — контроль суммы, а не отдельные работы сверх критериев: сумма обязательных минимумов текущей таблицы 3 равна порогу P. Исполнитель и срок оставлены пустыми.", 5), 65));
+            rows.Append(Row(4, HeaderCells(new string[] { "№ направления", "Направление", "Критерий", "Сейчас", "Требуется", "Тип действия", "Влияет на цель", "Полное условие", "Мероприятие", "Исполнитель", "Срок" }, 4), 42));
+            int row = 5;
+            foreach (DeficitRecord d in analysis.Deficits)
+            {
+                rows.Append(Row(row, N("A" + row, d.DirectionId, 3) + T("B" + row, d.DirectionName, 0) + T("C" + row, d.CriterionName, 0) + OptionalNumber("D" + row, d.Current) + OptionalNumber("E" + row, d.Required) + T("F" + row, ActionLabel(d.Type), d.Type == "assess" ? 7 : 0) + T("G" + row, d.BlockingTarget ? "Да" : "Нет", 0) + T("H" + row, d.ConditionText ?? "", 0) + T("I" + row, d.Action ?? "", 0) + T("J" + row, "", 0) + T("K" + row, "", 0), 120));
+                row++;
+            }
+            if (row == 5)
+            {
+                rows.Append(Row(row, T("I" + row, analysis.HasScope ? "Недостатков и незаполненных ответов не выявлено." : "Нет включённых направлений.", 0), 45));
+                row++;
+            }
+            return Sheet(rows, "A1:K" + (row - 1), "<col min=\"1\" max=\"1\" width=\"12\" customWidth=\"1\"/><col min=\"2\" max=\"2\" width=\"38\" customWidth=\"1\"/><col min=\"3\" max=\"3\" width=\"34\" customWidth=\"1\"/><col min=\"4\" max=\"5\" width=\"12\" customWidth=\"1\"/><col min=\"6\" max=\"7\" width=\"16\" customWidth=\"1\"/><col min=\"8\" max=\"9\" width=\"70\" customWidth=\"1\"/><col min=\"10\" max=\"10\" width=\"28\" customWidth=\"1\"/><col min=\"11\" max=\"11\" width=\"18\" customWidth=\"1\"/>", 4, "A4:K" + (row - 1), TwoTitleMerges("K"), true);
+        }
+
+        private static string GroupedActionsSheet(AssessmentAnalysis analysis)
+        {
+            StringBuilder rows = new StringBuilder();
+            rows.Append(Row(1, T("A1", "ОБЩИЕ ДЕФИЦИТЫ ПО НАПРАВЛЕНИЯМ", 1), 30));
+            rows.Append(Row(2, T("A2", "Одинаковые требования сгруппированы по критерию, типу действия и требуемой оценке. Номера направлений соответствуют листу «Сводка». Результат подтверждается по каждому направлению. " + Analysis.PriorityExplanation, 5), 80));
+            rows.Append(Row(4, HeaderCells(new string[] { "Приоритет", "Критерий", "Тип действия", "Требуется", "Направлений", "№ направлений", "Влияет на цель", "Полное условие и мероприятие", "Исполнитель", "Срок" }, 4), 42));
+            int row = 5;
+            foreach (GroupedAction g in analysis.GroupedActions)
+            {
+                rows.Append(Row(row, N("A" + row, g.Priority, 3) + T("B" + row, g.CriterionName, 0) + T("C" + row, ActionLabel(g.Type), g.Type == "assess" ? 7 : 0) + OptionalNumber("D" + row, g.Required) + N("E" + row, g.DirectionCount, 3) + T("F" + row, DirectionNumbers(g.DirectionIds), 0) + T("G" + row, g.BlockingTarget ? "Да" : "Нет", 0) + T("H" + row, ConditionAndAction(g.ConditionText, g.Action), 0) + T("I" + row, "", 0) + T("J" + row, "", 0), 120));
+                row++;
+            }
+            if (row == 5) { rows.Append(Row(row, T("H" + row, "Общих мероприятий по введённым данным нет.", 0), 45)); row++; }
+            return Sheet(rows, "A1:J" + (row - 1), "<col min=\"1\" max=\"1\" width=\"13\" customWidth=\"1\"/><col min=\"2\" max=\"2\" width=\"36\" customWidth=\"1\"/><col min=\"3\" max=\"5\" width=\"15\" customWidth=\"1\"/><col min=\"6\" max=\"6\" width=\"35\" customWidth=\"1\"/><col min=\"7\" max=\"7\" width=\"16\" customWidth=\"1\"/><col min=\"8\" max=\"8\" width=\"100\" customWidth=\"1\"/><col min=\"9\" max=\"9\" width=\"28\" customWidth=\"1\"/><col min=\"10\" max=\"10\" width=\"18\" customWidth=\"1\"/>", 4, "A4:J" + (row - 1), TwoTitleMerges("J"), true);
+        }
+
+        private static string ActionLabel(string type)
+        {
+            if (type == "assess") return "Оценить";
+            if (type == "improve") return "Улучшить";
+            if (type == "score") return "Порог P";
+            return type ?? "";
+        }
+        private static string NullableNumber(double? value) { return value.HasValue ? value.Value.ToString("0.###", Inv) : "—"; }
+        private static string OptionalNumber(string cell, double? value) { return value.HasValue ? N(cell, value.Value, 2) : T(cell, "—", 8); }
+        private static string ConditionAndAction(string condition, string action)
+        {
+            if (String.IsNullOrWhiteSpace(condition)) return action ?? "";
+            if (String.IsNullOrWhiteSpace(action) || String.Equals(condition.Trim(), action.Trim(), StringComparison.Ordinal)) return condition;
+            return "Условие: " + condition + "\nМероприятие: " + action;
+        }
+        private static string DirectionNumbers(int[] ids)
+        {
+            if (ids == null || ids.Length == 0) return "";
+            StringBuilder b = new StringBuilder();
+            for (int i = 0; i < ids.Length; i++) { if (i > 0) b.Append(", "); b.Append(ids[i].ToString(Inv)); }
+            return b.ToString();
+        }
+        private static string TwoTitleMerges(string lastColumn)
+        {
+            return "<mergeCells count=\"2\"><mergeCell ref=\"A1:" + lastColumn + "1\"/><mergeCell ref=\"A2:" + lastColumn + "2\"/></mergeCells>";
         }
 
         private static string SummarySheet(Assessment a, Summary s)
@@ -277,6 +402,28 @@ namespace MaturityApp
             return Sheet(rows, "A1:F" + (row - 1), "<col min=\"1\" max=\"1\" width=\"8\" customWidth=\"1\"/><col min=\"2\" max=\"2\" width=\"44\" customWidth=\"1\"/><col min=\"3\" max=\"5\" width=\"12\" customWidth=\"1\"/><col min=\"6\" max=\"6\" width=\"110\" customWidth=\"1\"/>", 1, "A1:F" + (row - 1), "", false);
         }
 
+        private static string SpreadsheetContentTypes(int count)
+        {
+            StringBuilder b = new StringBuilder("<?xml version=\"1.0\" encoding=\"UTF-8\"?><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/><Override PartName=\"/xl/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml\"/>");
+            for (int i = 1; i <= count; i++) b.Append("<Override PartName=\"/xl/worksheets/sheet" + i + ".xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>");
+            b.Append("<Override PartName=\"/docProps/core.xml\" ContentType=\"application/vnd.openxmlformats-package.core-properties+xml\"/><Override PartName=\"/docProps/app.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.extended-properties+xml\"/></Types>");
+            return b.ToString();
+        }
+        private static string WorkbookXml(string[] names)
+        {
+            StringBuilder b = new StringBuilder("<?xml version=\"1.0\" encoding=\"UTF-8\"?><workbook xmlns=\"" + NsSheet + "\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><bookViews><workbookView/></bookViews><sheets>");
+            for (int i = 0; i < names.Length; i++) b.Append("<sheet name=\"" + E(names[i]) + "\" sheetId=\"" + (i + 1) + "\" r:id=\"r" + (i + 1) + "\"/>");
+            b.Append("</sheets><calcPr calcId=\"191029\" fullCalcOnLoad=\"1\"/></workbook>");
+            return b.ToString();
+        }
+        private static string WorkbookRelationships(int count)
+        {
+            StringBuilder b = new StringBuilder("<?xml version=\"1.0\" encoding=\"UTF-8\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">");
+            for (int i = 1; i <= count; i++) b.Append("<Relationship Id=\"r" + i + "\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet" + i + ".xml\"/>");
+            b.Append("<Relationship Id=\"rStyles\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/></Relationships>");
+            return b.ToString();
+        }
+
         private static string Sheet(StringBuilder rows, string dimension, string cols, int freezeRows, string filter, string merges, bool landscape)
         {
             return "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><worksheet xmlns=\"" + NsSheet + "\"><sheetPr><pageSetUpPr fitToPage=\"1\"/></sheetPr><dimension ref=\"" + dimension + "\"/><sheetViews><sheetView workbookViewId=\"0\" showGridLines=\"0\"><pane ySplit=\"" + freezeRows + "\" topLeftCell=\"A" + (freezeRows + 1) + "\" activePane=\"bottomLeft\" state=\"frozen\"/><selection pane=\"bottomLeft\" activeCell=\"A" + (freezeRows + 1) + "\" sqref=\"A" + (freezeRows + 1) + "\"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight=\"18\"/><cols>" + cols + "</cols><sheetData>" + rows + "</sheetData><autoFilter ref=\"" + filter + "\"/>" + merges + "<printOptions horizontalCentered=\"1\"/><pageMargins left=\"0.3\" right=\"0.3\" top=\"0.5\" bottom=\"0.5\" header=\"0.2\" footer=\"0.2\"/><pageSetup paperSize=\"9\" orientation=\"" + (landscape ? "landscape" : "portrait") + "\" fitToWidth=\"1\" fitToHeight=\"0\"/><headerFooter><oddFooter>&amp;LОценка зрелости ИБ&amp;RСтраница &amp;P из &amp;N</oddFooter></headerFooter></worksheet>";
@@ -328,9 +475,10 @@ namespace MaturityApp
 
         private static string P(string text, string style)
         {
-            string t = E(text ?? "").Replace("\r\n", "\n").Replace("\r", "\n").Replace("\n", "</w:t><w:br/><w:t xml:space=\"preserve\">");
+            string t = WordText(text);
             return "<w:p>" + (style == null ? "" : "<w:pPr><w:pStyle w:val=\"" + style + "\"/></w:pPr>") + "<w:r><w:t xml:space=\"preserve\">" + t + "</w:t></w:r></w:p>";
         }
+        private static string WordText(string text) { return E(text ?? "").Replace("\r\n", "\n").Replace("\r", "\n").Replace("\n", "</w:t><w:br/><w:t xml:space=\"preserve\">"); }
         private static void AppendOptionalWord(StringBuilder b, string label, string value)
         {
             if (!String.IsNullOrWhiteSpace(value)) b.Append(P(label + ": " + value, null));
@@ -369,7 +517,7 @@ namespace MaturityApp
             StringBuilder b = new StringBuilder("<w:tr><w:trPr><w:cantSplit/>" + (header ? "<w:tblHeader/>" : "") + "</w:trPr>");
             foreach (string cell in cells)
             {
-                b.Append("<w:tc><w:tcPr><w:vAlign w:val=\"top\"/>" + (header ? "<w:shd w:val=\"clear\" w:fill=\"173F56\"/>" : "") + "</w:tcPr><w:p><w:pPr><w:spacing w:after=\"20\" w:line=\"220\" w:lineRule=\"auto\"/></w:pPr><w:r><w:rPr><w:sz w:val=\"18\"/>" + (header ? "<w:b/><w:color w:val=\"FFFFFF\"/>" : "") + "</w:rPr><w:t xml:space=\"preserve\">" + E(cell) + "</w:t></w:r></w:p></w:tc>");
+                b.Append("<w:tc><w:tcPr><w:vAlign w:val=\"top\"/>" + (header ? "<w:shd w:val=\"clear\" w:fill=\"173F56\"/>" : "") + "</w:tcPr><w:p><w:pPr><w:spacing w:after=\"20\" w:line=\"220\" w:lineRule=\"auto\"/></w:pPr><w:r><w:rPr><w:sz w:val=\"18\"/>" + (header ? "<w:b/><w:color w:val=\"FFFFFF\"/>" : "") + "</w:rPr><w:t xml:space=\"preserve\">" + WordText(cell) + "</w:t></w:r></w:p></w:tc>");
             }
             b.Append("</w:tr>"); return b.ToString();
         }

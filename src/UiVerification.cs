@@ -45,7 +45,9 @@ namespace MaturityApp
                 Test("copy source follows scope changes and undo is wired", CopyScopeAndUndo);
                 Test("detailed view stays accessible and manual changes survive undo", DetailedAndUndo);
                 Test("incomplete and search filters preserve answer data", Filters);
-                Test("all four pages build without the removed sidebar", AllPages);
+                Test("all pages including derived analysis preserve answers", AllPages);
+                Test("mass criteria input protects existing grades and supports overwrite undo", MassValueInput);
+                Test("mass visible scope and parameters never invent answers", MassVisibleScope);
                 Test("fast bundle exports and updates the preset ZIP without dialogs", FastBundle);
                 Test("opened bundle stays associated with ZIP for the next one click save", ReopenedBundle);
                 Test("empty scope disables the fast bundle button", EmptyScope);
@@ -222,9 +224,45 @@ namespace MaturityApp
         static void AllPages()
         {
             Assessment a = Assessment.Create(); MainWindow window = Create(a); string before = Answers(a);
-            foreach (string page in new[] { "assessment", "results", "settings", "quick" }) { Page(window, page); Assert(!window.IsVisible, "Page rendering showed a window."); }
+            foreach (string page in new[] { "assessment", "results", "settings", "analysis", "quick" }) { Page(window, page); Assert(!window.IsVisible, "Page rendering showed a window."); }
             Assert(Answers(a) == before, "Changing pages filled answers.");
             Assert(Rows(window).Count == 21, "The quick page failed after visiting legacy pages.");
+        }
+        static Button MassButton(MainWindow window, double value)
+        {
+            return ((List<Button>)Get(window, "massValueButtons")).Single(b => (double)b.Tag == value);
+        }
+        static CheckBox ReplaceMass(MainWindow window)
+        {
+            return Tree((DependencyObject)window.Content).OfType<CheckBox>().Single(b => (b.Content as string) == "Заменить введённые");
+        }
+        static void MassValueInput()
+        {
+            Assessment a = Assessment.Create(); a.Directions[0].Answers[0] = 0; a.Directions[20].Included = false;
+            MainWindow window = Create(a); string before = Store.Serialize(a);
+            Click(MassButton(window, .5));
+            Assert(a.Directions[0].Answers[0] == 0 && a.Directions.Skip(1).Take(19).All(d => d.Answers[0] == .5), "Mass default input overwrote a zero or missed included rows.");
+            Assert(a.Directions[20].Answers.All(x => !x.HasValue) && a.Directions.All(d => d.Answers.Skip(1).All(x => !x.HasValue)), "Mass single criterion touched exclusions or other criteria.");
+            Call(window, "UndoCopiedAnswers"); Assert(Store.Serialize(a) == before, "Undo failed to restore the pre-mass assessment.");
+            ReplaceMass(window).IsChecked = true; Assert(Store.Serialize(a) == before, "Selecting overwrite changed facts before a value was applied.");
+            Click(MassButton(window, 1)); Assert(a.Directions.Take(20).All(d => d.Answers[0] == 1), "Explicit overwrite did not replace a known grade.");
+            Call(window, "UndoCopiedAnswers"); Assert(Store.Serialize(a) == before, "Overwrite undo did not restore known grades.");
+            ReplaceMass(window).IsChecked = false; Call(window, "SelectMassCriterion", 5);
+            Assert(MassButton(window, .3).Visibility == Visibility.Visible, "Training does not expose 0.3."); Click(MassButton(window, .3)); Assert(a.Directions.Take(20).All(d => d.Answers[5] == .3), "Training mass grade was not applied.");
+            Call(window, "UndoCopiedAnswers"); Call(window, "SelectMassCriterion", -1);
+            Assert(MassButton(window, .3).Visibility == Visibility.Collapsed, "All-criteria mode exposes an invalid common 0.3 grade.");
+            Click(MassButton(window, .5)); Assert(a.Directions.Take(20).All(d => d.Answers.All(x => x.HasValue)) && a.Directions[0].Answers[0] == 0, "Common grade did not fill all included criteria while preserving explicit zero.");
+            Call(window, "UndoCopiedAnswers"); Assert(Store.Serialize(a) == before, "Common grade undo changed metadata, scope, targets or prior grades.");
+        }
+        static void MassVisibleScope()
+        {
+            Assessment a = Assessment.Create(); MainWindow window = Create(a); string before = Store.Serialize(a);
+            Call(window, "SelectMassCriterion", -1); ReplaceMass(window).IsChecked = true;
+            ComboBox scope = Tree((DependencyObject)window.Content).OfType<ComboBox>().Single(c => c.Items.Count == 2 && c.Items[0] is string && ((string)c.Items[0]).StartsWith("Все включённые")); scope.SelectedIndex = 1;
+            ((TextBox)Get(window, "search")).Text = "21";
+            Assert(Store.Serialize(a) == before, "Changing mass parameters or filters wrote answers without a command.");
+            Click(MassButton(window, 1)); Assert(a.Directions[20].Answers.All(x => x == 1) && a.Directions.Take(20).All(d => d.Answers.All(x => !x.HasValue)), "Visible-only mass scope touched hidden rows.");
+            Call(window, "UndoCopiedAnswers"); Assert(Store.Serialize(a) == before, "Visible-only mass undo failed.");
         }
         static void FastBundle()
         {

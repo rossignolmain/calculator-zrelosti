@@ -47,9 +47,11 @@ namespace MaturityApp
             TextBlock placeholder = Theme.Text("Поиск направления", 11, Theme.Muted); placeholder.Margin = new Thickness(8, 0, 0, 0); placeholder.IsHitTestVisible = false; placeholder.Visibility = quickSearch.Length == 0 ? Visibility.Visible : Visibility.Collapsed; searchBox.Children.Add(placeholder);
             search.TextChanged += (s, e) => { quickSearch = search.Text; placeholder.Visibility = quickSearch.Length == 0 ? Visibility.Visible : Visibility.Collapsed; FilterDirections(); }; filters.Children.Add(searchBox); top.Children.Add(summary);
             root.Children.Add(top);
-            Expander repeat = new Expander { Header = Theme.Text("Повторяющиеся ответы", 12, Theme.Muted), Margin = new Thickness(0, 0, 0, 10) };
+            Expander repeat = new Expander { Header = Theme.Text("Массовое заполнение · одно значение для всех", 12, Theme.Blue, true), Margin = new Thickness(0, 0, 0, 10) }; massExpander = repeat;
             StackPanel repeatBody = new StackPanel { Margin = new Thickness(0, 7, 0, 2) };
-            repeatBody.Children.Add(Theme.Text("Если условия одинаковы: повторите ответы выбранного направления только в пустых ячейках остальных включённых направлений. Уже введённые оценки сохранятся. Действие можно отменить.", 11, Theme.Muted));
+            repeatBody.Children.Add(BuildMassValuePanel());
+            StackPanel copyBody = new StackPanel { Margin = new Thickness(0, 7, 0, 0) };
+            copyBody.Children.Add(Theme.Text("Если условия одинаковы: повторите ответы выбранного направления только в пустых ячейках остальных включённых направлений. Уже введённые оценки сохранятся. Действие можно отменить.", 11, Theme.Muted));
             Grid repeatControls = new Grid { Margin = new Thickness(0, 8, 0, 0) }; repeatControls.ColumnDefinitions.Add(new ColumnDefinition()); repeatControls.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             ComboBox source = new ComboBox { FontSize = 12, Height = 33, Padding = new Thickness(6), Margin = new Thickness(0, 0, 10, 0) }; quickCopySource = source;
             foreach (DirectionAssessment d in assessment.Directions) source.Items.Add(new ComboBoxItem { Content = d.Id + ". " + Data.DirectionNames[d.Id - 1], Tag = d.Id, IsEnabled = d.Included });
@@ -62,7 +64,7 @@ namespace MaturityApp
                 copiedAnswers = changes; Changed(); UpdateNumbers();
                 status.Text = "Заполнено ответов: " + changes.Count + ". Перенесены только оценки; цели и комментарии сохранены.";
             }); copy.Padding = new Thickness(13, 7, 13, 7); Grid.SetColumn(copy, 1); repeatControls.Children.Add(copy);
-            repeatBody.Children.Add(repeatControls); repeat.Content = repeatBody; Grid.SetRow(repeat, 1); root.Children.Add(repeat);
+            copyBody.Children.Add(repeatControls); repeatBody.Children.Add(new Expander { Header = "Или повторить восемь ответов из направления", Content = copyBody, Margin = new Thickness(0, 10, 0, 0) }); repeat.Content = repeatBody; Grid.SetRow(repeat, 1); root.Children.Add(repeat);
             Grid table = new Grid(); table.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); table.RowDefinitions.Add(new RowDefinition());
             Grid headers = MatrixGrid(); headers.Margin = new Thickness(0, 0, 17, 0); headers.Background = Theme.B("#EAF0F8");
             AddMatrixHeader(headers, 0, "✓", "Учитывать направление в расчёте"); AddMatrixHeader(headers, 1, "Направление · нажмите для подробностей", "Полная анкета, пояснения и подтверждающие материалы");
@@ -109,10 +111,12 @@ namespace MaturityApp
             for (int j = 0; j < 8; j++) grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(j == 5 ? 1.25 : 1, GridUnitType.Star), MinWidth = j == 5 ? 94 : 73 });
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(59) }); grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(51) }); return grid;
         }
-        static void AddMatrixHeader(Grid grid, int col, string text, string tooltip)
+        void AddMatrixHeader(Grid grid, int col, string text, string tooltip)
         {
             TextBlock title = Theme.Text(text, 11, Theme.Muted, true); title.TextAlignment = col == 1 ? TextAlignment.Left : TextAlignment.Center;
-            Border cell = new Border { Child = title, Padding = new Thickness(4, 11, 4, 11), ToolTip = new TextBlock { Text = tooltip, MaxWidth = 480, TextWrapping = TextWrapping.Wrap } }; Grid.SetColumn(cell, col); grid.Children.Add(cell);
+            Border cell = new Border { Child = title, Padding = new Thickness(4, 11, 4, 11), ToolTip = new TextBlock { Text = tooltip + (col >= 2 && col <= 9 ? "\n\nНажмите заголовок для массового заполнения этого критерия." : ""), MaxWidth = 480, TextWrapping = TextWrapping.Wrap } };
+            if (col >= 2 && col <= 9) { int criterion = col - 2; cell.Cursor = Cursors.Hand; cell.MouseLeftButtonUp += (s, e) => { SelectMassCriterion(criterion); if (massExpander != null) massExpander.IsExpanded = true; }; }
+            Grid.SetColumn(cell, col); grid.Children.Add(cell);
         }
         void ForgetCopiedAnswer(int directionId, int criterion)
         {

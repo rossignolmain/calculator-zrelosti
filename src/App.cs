@@ -40,8 +40,10 @@ namespace MaturityApp
                     MainWindow window = new MainWindow(demo, false);
                     window.RenderPreview("quick", Path.Combine(folder, "Оценка.png"));
                     window.RenderPreview("quick", Path.Combine(folder, "Оценка компактно.png"), 1280, 740);
+                    window.RenderPreview("bulk", Path.Combine(folder, "Массовое заполнение.png"));
                     window.RenderPreview("assessment", Path.Combine(folder, "Подробно.png"));
                     window.RenderPreview("results", Path.Combine(folder, "Результаты.png"));
+                    window.RenderPreview("analysis", Path.Combine(folder, "Аналитика.png"));
                     window.RenderPreview("settings", Path.Combine(folder, "Параметры.png"));
                     ExportReviewWindow review = new ExportReviewWindow(demo, true);
                     review.RenderPreview(Path.Combine(folder, "Комплект.png"));
@@ -114,7 +116,7 @@ namespace MaturityApp
         TextBlock headerTitle, headerSub, status, sidebarProgress;
         ProgressBar globalProgress;
         TextBox search;
-        Button navAssess, navResults, navSettings;
+        Button navAssess, navResults, navAnalysis, navSettings;
         TextBlock directionLevel, directionP, directionProgress, remainingText, overallValue, overallLabel, answeredValue, countValue;
         StackPanel recommendationPanel;
         readonly List<RadioButton[]> answerRadios = new List<RadioButton[]>();
@@ -211,7 +213,7 @@ namespace MaturityApp
             bundleButton.ToolTip = "Проект, Word и Excel одним действием. При первом сохранении выберите файл; следующие нажатия обновят его."; actions.Children.Add(bundleButton);
             Grid tabs = new Grid { Margin = new Thickness(24, 0, 24, 12) }; tabs.ColumnDefinitions.Add(new ColumnDefinition()); tabs.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); Grid.SetRow(tabs, 1); shell.Children.Add(tabs);
             StackPanel nav = new StackPanel { Orientation = Orientation.Horizontal };
-            navAssess = Nav("Оценка", "quick"); navResults = Nav("Результат", "results"); navSettings = Nav("Данные для отчёта", "settings"); nav.Children.Add(navAssess); nav.Children.Add(navResults); nav.Children.Add(navSettings); tabs.Children.Add(nav);
+            navAssess = Nav("Оценка", "quick"); navResults = Nav("Результат", "results"); navAnalysis = Nav("Аналитика и план", "analysis"); navSettings = Nav("Данные для отчёта", "settings"); nav.Children.Add(navAssess); nav.Children.Add(navResults); nav.Children.Add(navAnalysis); nav.Children.Add(navSettings); tabs.Children.Add(nav);
             StackPanel progress = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center }; Grid.SetColumn(progress, 1); tabs.Children.Add(progress);
             sidebarProgress = Theme.Text("Заполнено 0 из 168", 12, Theme.Muted); progress.Children.Add(sidebarProgress);
             globalProgress = new ProgressBar { Minimum = 0, Maximum = 100, Width = 145, Height = 5, Margin = new Thickness(12, 0, 0, 0), Foreground = Theme.Blue, Background = Theme.B("#DDE5F1"), BorderThickness = new Thickness(0) }; progress.Children.Add(globalProgress);
@@ -234,17 +236,19 @@ namespace MaturityApp
                 bool match = q.Length == 0 || (d.Id + " " + Data.DirectionNames[d.Id - 1]).IndexOf(q, StringComparison.CurrentCultureIgnoreCase) >= 0;
                 row.Root.Visibility = match && (!onlyIncomplete || d.Included && Calc.Direction(d).Answered < 8) ? Visibility.Visible : Visibility.Collapsed;
             }
+            RefreshMassButtons();
         }
         void ShowPage()
         {
-            building = true; center.Children.Clear(); answerRadios.Clear(); answerBorders.Clear(); quickRows.Clear(); quickScore = quickNotice = quickHint = null; quickCopySource = null;
+            building = true; center.Children.Clear(); answerRadios.Clear(); answerBorders.Clear(); quickRows.Clear(); quickScore = quickNotice = quickHint = null; quickCopySource = null; massExpander = null; massCriterionBox = null; massScopeText = null; massValueButtons.Clear();
             directionLevel = directionP = directionProgress = remainingText = overallValue = overallLabel = answeredValue = countValue = null; recommendationPanel = null;
             bool assessing = page == "quick" || page == "assessment";
             navAssess.Background = assessing ? Theme.Blue : Brushes.Transparent; navAssess.Foreground = assessing ? Brushes.White : Theme.Muted;
             navResults.Background = page == "results" ? Theme.Blue : Brushes.Transparent; navResults.Foreground = page == "results" ? Brushes.White : Theme.Muted;
+            navAnalysis.Background = page == "analysis" ? Theme.Blue : Brushes.Transparent; navAnalysis.Foreground = page == "analysis" ? Brushes.White : Theme.Muted;
             navSettings.Background = page == "settings" ? Theme.Blue : Brushes.Transparent; navSettings.Foreground = page == "settings" ? Brushes.White : Theme.Muted;
-            headerTitle.Text = page == "quick" ? "Оценка зрелости" : page == "assessment" ? "Подробная оценка" : page == "results" ? "Результат оценки" : "Данные для отчёта";
-            if (page == "quick") BuildQuickAssessment(); else if (page == "assessment") BuildAssessment(); else if (page == "results") BuildResults(); else BuildSettings();
+            headerTitle.Text = page == "quick" ? "Оценка зрелости" : page == "assessment" ? "Подробная оценка" : page == "results" ? "Результат оценки" : page == "analysis" ? "Аналитика и план" : "Данные для отчёта";
+            if (page == "quick") BuildQuickAssessment(); else if (page == "assessment") BuildAssessment(); else if (page == "results") BuildResults(); else if (page == "analysis") BuildAnalysis(); else BuildSettings();
             building = false; UpdateNumbers(); UpdateHeader();
         }
         StackPanel PageStack()
@@ -532,7 +536,7 @@ namespace MaturityApp
         void NewProject()
         {
             if (!PreserveCurrent()) return;
-            saveTimer.Stop(); assessment = Assessment.Create(); projectPath = bundlePath = null; copiedAnswers = null; dirty = false; autoOk = false; selected = 0; quickSearch = ""; onlyIncomplete = false; page = "quick"; ShowPage(); AutoSave();
+            saveTimer.Stop(); assessment = Assessment.Create(); projectPath = bundlePath = null; copiedAnswers = null; dirty = false; autoOk = false; selected = 0; quickSearch = ""; onlyIncomplete = false; massCriterion = 0; massOverwrite = massVisibleOnly = false; page = "quick"; ShowPage(); AutoSave();
         }
         void OpenProject()
         {
@@ -541,7 +545,7 @@ namespace MaturityApp
             Assessment loaded;
             try { loaded = ProjectTools.LoadAssessmentFile(dialog.FileName); } catch (Exception ex) { ShowError("Не удалось открыть оценку", ex); return; }
             if (!PreserveCurrent()) return;
-            saveTimer.Stop(); assessment = loaded; copiedAnswers = null; dirty = false; selected = 0; quickSearch = ""; onlyIncomplete = false; page = "quick"; ShowPage(); SetProjectPath(dialog.FileName); AutoSave(); status.Text = "Открыто: " + dialog.FileName;
+            saveTimer.Stop(); assessment = loaded; copiedAnswers = null; dirty = false; selected = 0; quickSearch = ""; onlyIncomplete = false; massCriterion = 0; massOverwrite = massVisibleOnly = false; page = "quick"; ShowPage(); SetProjectPath(dialog.FileName); AutoSave(); status.Text = "Открыто: " + dialog.FileName;
         }
         string DefaultName()
         {
@@ -624,7 +628,8 @@ namespace MaturityApp
         void ShowError(string title, Exception ex) { MessageBox.Show(this, ex.Message, title, MessageBoxButton.OK, MessageBoxImage.Error); }
         public void RenderPreview(string targetPage, string path, int width = 1450, int height = 920)
         {
-            page = targetPage; ShowPage();
+            page = targetPage == "bulk" ? "quick" : targetPage; ShowPage();
+            if (targetPage == "bulk" && massExpander != null) massExpander.IsExpanded = true;
             FrameworkElement content = (FrameworkElement)Content;
             content.Width = width; content.Height = height;
             content.Measure(new Size(width, height)); content.Arrange(new Rect(0, 0, width, height)); content.UpdateLayout();

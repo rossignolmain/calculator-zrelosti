@@ -59,6 +59,52 @@ namespace MaturityApp
             return changes;
         }
 
+        // criterion -1 means all eight criteria. A null scope means every included
+        // direction; an explicit scope contains direction IDs, not array indices.
+        // Duplicate IDs are harmless, and valid but excluded directions are skipped.
+        // This method only plans changes, so updating an operation's parameters never
+        // records answers. SetValue is the explicit command that applies this plan.
+        public static List<AnswerChange> PreviewSetValue(Assessment a, int criterion, double value, bool overwrite, IEnumerable<int> directionIds = null)
+        {
+            if (criterion < -1 || criterion >= Data.Criteria.Length) throw new ArgumentOutOfRangeException("criterion");
+            ValidateStructure(a);
+            int[] criteria = criterion == -1 ? Enumerable.Range(0, Data.Criteria.Length).ToArray() : new[] { criterion };
+            foreach (int selected in criteria)
+                if (!Allowed(selected, value)) throw new ArgumentOutOfRangeException("value", "Оценка недопустима для одного из выбранных критериев.");
+
+            // Enumerate and validate the entire scope before constructing/applying
+            // any mutation, including a lazily supplied sequence that may fail.
+            int[] requested = directionIds == null ? a.Directions.Select(d => d.Id).ToArray() : directionIds.ToArray();
+            HashSet<int> ids = new HashSet<int>();
+            foreach (int id in requested)
+            {
+                if (id < 1 || id > 21) throw new ArgumentOutOfRangeException("directionIds", "Номер направления должен находиться между 1 и 21.");
+                ids.Add(id);
+            }
+
+            Dictionary<int, double> canonicalValues = criteria.ToDictionary(selected => selected,
+                selected => Data.Criteria[selected].Options.First(o => Math.Abs(o.Value - value) < 1e-10).Value);
+            List<AnswerChange> changes = new List<AnswerChange>();
+            foreach (DirectionAssessment destination in a.Directions.Where(d => d.Included && ids.Contains(d.Id)).OrderBy(d => d.Id))
+                foreach (int selected in criteria)
+                {
+                    double? before = destination.Answers[selected];
+                    if (!overwrite && before.HasValue) continue; // An explicit zero is filled.
+                    double after = canonicalValues[selected];
+                    if (before.HasValue && Math.Abs(before.Value - after) < 1e-10) continue;
+                    changes.Add(new AnswerChange { DirectionId = destination.Id, Criterion = selected, Before = before, After = after });
+                }
+            return changes;
+        }
+
+        public static List<AnswerChange> SetValue(Assessment a, int criterion, double value, bool overwrite, IEnumerable<int> directionIds = null)
+        {
+            List<AnswerChange> changes = PreviewSetValue(a, criterion, value, overwrite, directionIds);
+            Dictionary<int, DirectionAssessment> destinations = a.Directions.ToDictionary(d => d.Id);
+            foreach (AnswerChange change in changes) destinations[change.DirectionId].Answers[change.Criterion] = change.After;
+            return changes;
+        }
+
         public static int Revert(Assessment a, IEnumerable<AnswerChange> changes)
         {
             ValidateStructure(a);
