@@ -22,6 +22,8 @@ namespace MaturityApp
     {
         public int Version = 1;
         public string Organization = "", SystemName = "", Assessor = "", Notes = "";
+        public string OrganizationShort = "", OrganizationAddress = "", City = "";
+        public string AssessorPosition = "", ApproverName = "", ApproverPosition = "", DocumentNumber = "";
         public string Date = DateTime.Today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         public int Category = 1;
         public DirectionAssessment[] Directions;
@@ -145,6 +147,9 @@ namespace MaturityApp
             a.Directions = a.Directions.OrderBy(x => x.Id).ToArray();
             a.Organization = a.Organization ?? ""; a.SystemName = a.SystemName ?? "";
             a.Assessor = a.Assessor ?? ""; a.Notes = a.Notes ?? "";
+            a.OrganizationShort = a.OrganizationShort ?? ""; a.OrganizationAddress = a.OrganizationAddress ?? ""; a.City = a.City ?? "";
+            a.AssessorPosition = a.AssessorPosition ?? ""; a.ApproverName = a.ApproverName ?? "";
+            a.ApproverPosition = a.ApproverPosition ?? ""; a.DocumentNumber = a.DocumentNumber ?? "";
         }
         public static Assessment Load(string path)
         {

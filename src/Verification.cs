@@ -2,9 +2,11 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Text;
 using System.Web.Script.Serialization;
+using System.Xml;
 
 namespace MaturityApp
 {
@@ -55,6 +57,7 @@ namespace MaturityApp
                 VerifyCalculations();
                 VerifyPersistence();
                 VerifyValidation();
+                VerifyProjectTools();
                 Test("sample reports and saved assessment", CreateSampleReports);
             }
             catch (Exception ex) { report.errors.Add("Verification infrastructure: " + ex.GetType().Name + ": " + ex.Message); }
@@ -330,8 +333,15 @@ namespace MaturityApp
         {
             Assessment sample = Assessment.Create(); sample.Date = "2026-10-16";
             sample.Organization = "ООО «Пример организации» & партнёры";
+            sample.OrganizationShort = "ООО «Пример»";
+            sample.OrganizationAddress = "620000, г. Екатеринбург, ул. Примерная, д. 7";
+            sample.City = "Екатеринбург";
+            sample.DocumentNumber = "УЗИ-2026/017";
             sample.SystemName = "Информационная система «Учёт и аналитика»";
             sample.Assessor = "Ответственный за информационную безопасность — Иванов Пётр Сергеевич";
+            sample.AssessorPosition = "Ведущий специалист по защите информации";
+            sample.ApproverName = "Петрова Анна Ёлкина";
+            sample.ApproverPosition = "Директор";
             sample.Category = 2;
             sample.Notes = "Проверочный пример. Оценка включает подтверждающие материалы, исключённые направления, разные уровни зрелости и незаполненные ответы.\nВнутренний комментарий: <проверка экранирования> & Unicode ✓.";
             for (int i = 0; i < sample.Directions.Length; i++)
@@ -356,6 +366,199 @@ namespace MaturityApp
             {
                 Check(File.Exists(file) && new FileInfo(file).Length > 100, "Generated sample file: " + Path.GetFileName(file));
                 report.generatedFiles.Add(file);
+            }
+        }
+
+        static void VerifyProjectTools()
+        {
+            Test("preflight distinguishes required metadata unanswered criteria and optional signatures", delegate
+            {
+                Assessment a = Assessment.Create();
+                string before = Store.Serialize(a);
+                string[] initial = ProjectTools.Preflight(a);
+                Check(initial.Length == 24, "New assessment has three missing core metadata fields and 21 incomplete directions");
+                Check(initial.Count(x => x.Contains("не заполнено 8 из 8")) == 21, "Preflight reports every included incomplete direction");
+                Check(Store.Serialize(a) == before, "Preflight does not modify the original assessment");
+                a.Organization = "Организация"; a.SystemName = "Система"; a.Assessor = "Оценщик";
+                foreach (DirectionAssessment d in a.Directions) d.Answers = NullableAnswers(Representatives[0]);
+                Check(ProjectTools.Preflight(a).Length == 0, "Optional approver position address and document number are not required");
+                a.Directions[0].Answers[0] = null;
+                string[] oneMissing = ProjectTools.Preflight(a);
+                Check(oneMissing.Length == 1 && oneMissing[0].Contains("не заполнено 1 из 8"), "One null response is reported while explicit zeros count as answered");
+                a.Directions[0].Included = false;
+                string[] excluded = ProjectTools.Preflight(a);
+                Check(excluded.Length == 1 && excluded[0].Contains("основание исключения"), "Missing excluded direction evidence is an advisory instead of an answer warning");
+                a.Directions[0].Evidence = "Технология отсутствует.";
+                Check(ProjectTools.Preflight(a).Length == 0, "Excluded direction with a reason needs no answers");
+                foreach (DirectionAssessment d in a.Directions) { d.Included = false; d.Evidence = "Не применяется."; }
+                Check(ProjectTools.Preflight(a).Length == 1 && ProjectTools.Preflight(a)[0].Contains("Область оценки пуста"), "Preflight identifies zero scope");
+            });
+            Test("organization profile roundtrip contains only reusable organization and people fields", delegate
+            {
+                Assessment a = Assessment.Create();
+                a.Organization = "ООО «Орбита» & партнёры"; a.OrganizationShort = "Орбита";
+                a.OrganizationAddress = "г. Екатеринбург, ул. Примерная, 17"; a.City = "Екатеринбург";
+                a.Assessor = "Иванов Пётр Сергеевич"; a.AssessorPosition = "Эксперт";
+                a.ApproverName = "Петрова Анна"; a.ApproverPosition = "Директор";
+                a.SystemName = "НЕ ДОЛЖНО БЫТЬ В ПРОФИЛЕ"; a.Notes = "Заметки конкретной оценки";
+                a.DocumentNumber = "ОТЧЁТ-007"; a.Directions[0].Evidence = "Доказательство"; a.Directions[0].Answers[0] = 1;
+                string profilePath = Path.Combine(outputFolder, "organization-profile.json");
+                ProjectTools.SaveProfile(a, profilePath); ProjectTools.SaveProfile(a, profilePath);
+                OrganizationProfile profile = ProjectTools.LoadProfile(profilePath);
+                Check(profile.Version == 1 && profile.Organization == a.Organization && profile.OrganizationShort == a.OrganizationShort && profile.OrganizationAddress == a.OrganizationAddress && profile.City == a.City, "Unicode organization fields survive profile save and load");
+                Check(profile.Assessor == a.Assessor && profile.AssessorPosition == a.AssessorPosition && profile.ApproverName == a.ApproverName && profile.ApproverPosition == a.ApproverPosition, "People fields survive profile save and load");
+                Dictionary<string, object> json = new JavaScriptSerializer().DeserializeObject(File.ReadAllText(profilePath, Encoding.UTF8)) as Dictionary<string, object>;
+                string[] expected = { "Version", "Organization", "OrganizationShort", "OrganizationAddress", "City", "Assessor", "AssessorPosition", "ApproverName", "ApproverPosition" };
+                Check(json != null && json.Keys.OrderBy(x => x).SequenceEqual(expected.OrderBy(x => x)), "Profile serializes exactly the version and eight permitted fields");
+                Check(!Directory.GetFiles(outputFolder, ".organization-profile.json.*.tmp").Any(), "Atomic profile replacement leaves no temporary file");
+                Assessment target = WithLevels(3, 4, 1);
+                target.SystemName = "Новая система"; target.Date = "2025-12-31"; target.Notes = "Сохранить примечания"; target.DocumentNumber = "НОМЕР-99";
+                target.Category = 3; foreach (DirectionAssessment d in target.Directions) d.Target = 3;
+                target.Directions[1].Target = 4; target.Directions[0].Evidence = "Сохранить подтверждение";
+                string invariantBefore = AssessmentSpecificState(target);
+                double scoreBefore = Calc.Summary(target).Average;
+                ProjectTools.ApplyProfile(target, profile);
+                Check(target.Organization == a.Organization && target.ApproverName == a.ApproverName && target.AssessorPosition == a.AssessorPosition, "Applying a profile transfers the requested metadata");
+                Check(AssessmentSpecificState(target) == invariantBefore, "Profile application preserves system date category document number notes answers targets applicability and evidence");
+                Equal(Calc.Summary(target).Average, scoreBefore, "Profile application preserves calculated maturity");
+                report.generatedFiles.Add(profilePath);
+            });
+            Test("profile null normalization and invalid profiles preserve target state", delegate
+            {
+                string path = Path.Combine(outputFolder, "invalid-profile-test.json");
+                try
+                {
+                    File.WriteAllText(path, "{\"Version\":1,\"Organization\":null,\"City\":null,\"ApproverName\":null}", new UTF8Encoding(false));
+                    OrganizationProfile normalized = ProjectTools.LoadProfile(path);
+                    Check(normalized.Organization == "" && normalized.City == "" && normalized.ApproverName == "" && normalized.Assessor == "", "Null and omitted optional profile text normalize to empty strings");
+                    Assessment target = Assessment.Create(); target.Organization = "Сохранить организацию";
+                    string original = Store.Serialize(target);
+                    foreach (string json in new[] { "null", "{}", "[]", "{", "{\"Version\":2}", "{\"Version\":\"1\"}", "{\"Version\":1,\"Organization\":[1,2]}" })
+                    {
+                        File.WriteAllText(path, json, new UTF8Encoding(false));
+                        bool rejected = false;
+                        try { ProjectTools.ApplyProfile(target, ProjectTools.LoadProfile(path)); } catch { rejected = true; }
+                        Check(rejected && Store.Serialize(target) == original, "Invalid loaded profile rejected without changing assessment: " + json);
+                    }
+                    bool invalidObject = false;
+                    try { ProjectTools.ApplyProfile(target, new OrganizationProfile { Version = 2, Organization = "Не применять" }); } catch { invalidObject = true; }
+                    Check(invalidObject && Store.Serialize(target) == original, "ApplyProfile validates version before changing any field");
+                    using (FileStream oversized = new FileStream(path, FileMode.Create, FileAccess.Write)) oversized.SetLength(4 * 1024 * 1024 + 1);
+                    bool oversizedRejected = false; try { ProjectTools.LoadProfile(path); } catch { oversizedRejected = true; }
+                    Check(oversizedRejected, "Profile larger than four MiB is rejected before parsing");
+                }
+                finally { if (File.Exists(path)) File.Delete(path); }
+            });
+            Test("version one assessments from release one remain compatible", delegate
+            {
+                Assessment source = WithLevels(4, 2);
+                source.Organization = "Старая оценка"; source.SystemName = "ГИС"; source.Assessor = "Оценщик";
+                JavaScriptSerializer serializer = new JavaScriptSerializer { MaxJsonLength = 4 * 1024 * 1024 };
+                Dictionary<string, object> legacy = serializer.DeserializeObject(Store.Serialize(source)) as Dictionary<string, object>;
+                foreach (string field in new[] { "OrganizationShort", "OrganizationAddress", "City", "AssessorPosition", "ApproverName", "ApproverPosition", "DocumentNumber" }) legacy.Remove(field);
+                Assessment loaded = Store.Parse(serializer.Serialize(legacy));
+                Check(loaded.Version == 1 && loaded.Organization == source.Organization && loaded.SystemName == source.SystemName, "Version one metadata remains readable without new fields");
+                Check(loaded.OrganizationShort == "" && loaded.OrganizationAddress == "" && loaded.City == "" && loaded.AssessorPosition == "" && loaded.ApproverName == "" && loaded.ApproverPosition == "" && loaded.DocumentNumber == "", "New fields default to empty for old files");
+                Equal(Calc.Summary(loaded).Average, 3, "Legacy project scoring is unchanged");
+            });
+            Test("bundle full project and valid nested reports share the same snapshot", delegate
+            {
+                Assessment a = WithLevels(4, 2, 1);
+                a.Organization = "ООО «Комплект» & партнёры"; a.SystemName = "ГИС «Учёт»";
+                a.Assessor = "Иванов Пётр"; a.AssessorPosition = "Эксперт";
+                a.ApproverName = "Смирнова Анна"; a.ApproverPosition = "Директор";
+                a.OrganizationShort = "Комплект"; a.OrganizationAddress = "ул. Примерная, 7"; a.City = "Екатеринбург";
+                a.DocumentNumber = "УЗИ/2026-42"; a.Date = "2026-10-16";
+                foreach (DirectionAssessment d in a.Directions.Where(x => !x.Included)) d.Evidence = "Направление не применяется.";
+                a.Directions[2].Answers[7] = null;
+                string original = Store.Serialize(a);
+                string path = Path.Combine(outputFolder, "bundle-full.zip");
+                ProjectTools.ExportBundle(a, path, true, true);
+                using (ZipArchive zip = ZipFile.OpenRead(path))
+                {
+                    Check(zip.Entries.Count == 4, "Full bundle has project Word Excel and manifest");
+                    Check(zip.GetEntry("01 Проект.uzi.json") != null && zip.GetEntry("02 Отчёт.docx") != null && zip.GetEntry("03 Таблица.xlsx") != null && zip.GetEntry("Состав комплекта.txt") != null, "Bundle entry names use the requested Unicode names");
+                    Assessment bundled = Store.Parse(ReadZipText(zip.GetEntry("01 Проект.uzi.json")));
+                    Check(Store.Serialize(bundled) == original, "Bundled JSON is the exact validated assessment snapshot");
+                    string manifest = ReadZipText(zip.GetEntry("Состав комплекта.txt"));
+                    Check(manifest.Contains(a.Organization) && manifest.Contains(a.SystemName) && manifest.Contains(a.DocumentNumber) && manifest.Contains(a.ApproverName) && manifest.Contains(Data.SourceUrl), "Manifest includes metadata and source");
+                    Check(manifest.Contains("ПРЕДВАРИТЕЛЬНЫЙ") && manifest.Contains("не заполнено 1 из 8"), "Manifest reports preliminary status and preflight omissions");
+                    ValidateNestedReport(zip.GetEntry("02 Отчёт.docx"), "word/document.xml", a.Organization);
+                    ValidateNestedReport(zip.GetEntry("03 Таблица.xlsx"), "xl/workbook.xml", null);
+                }
+                Check(Store.Serialize(a) == original, "Bundle export does not change the current assessment");
+                Check(!Directory.GetDirectories(outputFolder, ".maturity-bundle-*").Any(), "Successful bundle export removes its scoped scratch folder");
+                report.generatedFiles.Add(path);
+            });
+            Test("bundle optional report flags and replacement", delegate
+            {
+                Assessment a = WithLevels(4); a.Organization = "Организация"; a.SystemName = "Система"; a.Assessor = "Оценщик";
+                foreach (DirectionAssessment d in a.Directions.Where(x => !x.Included)) d.Evidence = "Не применяется.";
+                foreach (bool word in new[] { false, true }) foreach (bool excel in new[] { false, true })
+                {
+                    if (word && excel) continue;
+                    string path = Path.Combine(outputFolder, "bundle-options-" + (word ? "word" : excel ? "excel" : "project") + ".zip");
+                    File.WriteAllText(path, "Заменяемый файл", new UTF8Encoding(false));
+                    ProjectTools.ExportBundle(a, path, word, excel);
+                    using (ZipArchive zip = ZipFile.OpenRead(path))
+                    {
+                        Check(zip.Entries.Count == 2 + (word ? 1 : 0) + (excel ? 1 : 0), "Optional flags determine entry count");
+                        Check((zip.GetEntry("02 Отчёт.docx") != null) == word && (zip.GetEntry("03 Таблица.xlsx") != null) == excel, "Optional flags determine report membership");
+                        Check(ReadZipText(zip.GetEntry("Состав комплекта.txt")).Contains("Заполнение критериев: полное"), "Complete bundle manifest reports full completion");
+                        Check(Calc.Summary(Store.Parse(ReadZipText(zip.GetEntry("01 Проект.uzi.json")))).Average == 4, "Project is always included and loadable");
+                    }
+                    report.generatedFiles.Add(path);
+                }
+                Check(!Directory.GetDirectories(outputFolder, ".maturity-bundle-*").Any(), "Optional bundle exports remove all scoped scratch folders");
+            });
+            Test("zero scope and invalid assessments do not overwrite existing bundles", delegate
+            {
+                string path = Path.Combine(outputFolder, "bundle-preserve-test.zip");
+                byte[] original = Encoding.UTF8.GetBytes("Existing target must survive.");
+                File.WriteAllBytes(path, original);
+                try
+                {
+                    Assessment empty = WithLevels();
+                    bool rejected = false; try { ProjectTools.ExportBundle(empty, path, true, true); } catch { rejected = true; }
+                    Check(rejected && File.ReadAllBytes(path).SequenceEqual(original), "Zero scope rejected before replacing the target");
+                    Assessment invalid = Assessment.Create(); invalid.Directions[0].Answers[0] = .25;
+                    rejected = false; try { ProjectTools.ExportBundle(invalid, path, true, true); } catch { rejected = true; }
+                    Check(rejected && File.ReadAllBytes(path).SequenceEqual(original), "Invalid assessment rejected before replacing the target");
+                    Check(!Directory.GetDirectories(outputFolder, ".maturity-bundle-*").Any(), "Rejected bundle exports leave no scratch directories");
+                }
+                finally { if (File.Exists(path)) File.Delete(path); }
+            });
+        }
+
+        static string AssessmentSpecificState(Assessment a)
+        {
+            return new JavaScriptSerializer { MaxJsonLength = 4 * 1024 * 1024 }.Serialize(new {
+                a.Version, a.SystemName, a.Date, a.Category, a.Notes, a.DocumentNumber, a.Directions
+            });
+        }
+        static string ReadZipText(ZipArchiveEntry entry)
+        {
+            if (entry == null) throw new InvalidDataException("Expected ZIP entry is missing.");
+            using (Stream stream = entry.Open()) using (StreamReader reader = new StreamReader(stream, Encoding.UTF8)) return reader.ReadToEnd();
+        }
+        static void ValidateNestedReport(ZipArchiveEntry outerEntry, string requiredPart, string expectedText)
+        {
+            if (outerEntry == null) throw new InvalidDataException("Nested report is missing.");
+            using (MemoryStream memory = new MemoryStream())
+            {
+                using (Stream input = outerEntry.Open()) input.CopyTo(memory);
+                memory.Position = 0;
+                using (ZipArchive reportZip = new ZipArchive(memory, ZipArchiveMode.Read, false, Encoding.UTF8))
+                {
+                    Check(reportZip.GetEntry("[Content_Types].xml") != null && reportZip.GetEntry(requiredPart) != null, "Nested Office report has required package parts");
+                    foreach (ZipArchiveEntry part in reportZip.Entries.Where(x => x.FullName.EndsWith(".xml", StringComparison.OrdinalIgnoreCase) || x.FullName.EndsWith(".rels", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        XmlDocument xml = new XmlDocument(); xml.XmlResolver = null;
+                        using (Stream stream = part.Open()) xml.Load(stream);
+                        Check(xml.DocumentElement != null, "Nested Office XML is well formed: " + part.FullName);
+                        if (part.FullName == requiredPart && expectedText != null) Check(xml.InnerText.Contains(expectedText), "Nested Word report uses the same Unicode organization metadata");
+                    }
+                }
             }
         }
     }

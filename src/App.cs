@@ -32,12 +32,16 @@ namespace MaturityApp
                     Assessment demo = Assessment.Create();
                     demo.Organization = "Пример организации"; demo.SystemName = "Информационная система";
                     demo.Assessor = "Ответственный за информационную безопасность";
+                    demo.OrganizationShort = "Пример"; demo.City = "Город";
+                    demo.ApproverPosition = "Руководитель организации";
                     demo.Directions[0].Answers = new double?[] { 1, 1, .5, .5, 1, .5, 0, .5 };
                     demo.Directions[0].Evidence = "Положение о защите информации, утверждённые регламенты и журнал плановых проверок.";
                     MainWindow window = new MainWindow(demo, false);
                     window.RenderPreview("assessment", Path.Combine(folder, "Оценка.png"));
                     window.RenderPreview("results", Path.Combine(folder, "Результаты.png"));
                     window.RenderPreview("settings", Path.Combine(folder, "Параметры.png"));
+                    ExportReviewWindow review = new ExportReviewWindow(demo, true);
+                    review.RenderPreview(Path.Combine(folder, "Комплект.png"));
                     app.Shutdown(); return 0;
                 }
                 Assessment initial = null;
@@ -214,7 +218,9 @@ namespace MaturityApp
             actions.Children.Add(Theme.Button("Новая", NewProject)); actions.Children.Add(Theme.Button("Открыть", OpenProject));
             Button save = Theme.Button("Сохранить", () => SaveProject(false), true); save.ToolTip = "Сохранить проект · Ctrl+S\nСохранить как · Ctrl+Shift+S"; actions.Children.Add(save);
             Button export = Theme.Button("Экспорт  ▾", () => { });
-            ContextMenu menu = new ContextMenu(); MenuItem word = new MenuItem { Header = "Отчёт Word (.docx)" }; word.Click += (s, e) => Export(true); menu.Items.Add(word);
+            ContextMenu menu = new ContextMenu();
+            MenuItem bundle = new MenuItem { Header = "Комплект оценки (.zip)" }; bundle.Click += (s, e) => ExportBundle(); menu.Items.Add(bundle); menu.Items.Add(new Separator());
+            MenuItem word = new MenuItem { Header = "Отчёт Word (.docx)" }; word.Click += (s, e) => Export(true); menu.Items.Add(word);
             MenuItem excel = new MenuItem { Header = "Таблица Excel (.xlsx)" }; excel.Click += (s, e) => Export(false); menu.Items.Add(excel);
             MenuItem saveas = new MenuItem { Header = "Сохранить проект как…" }; saveas.Click += (s, e) => SaveProject(true); menu.Items.Add(new Separator()); menu.Items.Add(saveas);
             export.ContextMenu = menu; export.Click += (s, e) => { menu.PlacementTarget = export; menu.Placement = PlacementMode.Bottom; menu.IsOpen = true; }; actions.Children.Add(export);
@@ -405,7 +411,7 @@ namespace MaturityApp
             }
             if (!any) body.Children.Add(Theme.Card(Theme.Text(sum.Count == 0 ? "Включите направления в область оценки." : "Целевые уровни достигнуты по всем включённым направлениям.", 13)));
             StackPanel exports = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 20, 0, 24) };
-            exports.Children.Add(Theme.Button("Сформировать отчёт Word", () => Export(true), true)); exports.Children.Add(Theme.Button("Выгрузить в Excel", () => Export(false))); body.Children.Add(exports);
+            exports.Children.Add(Theme.Button("Сохранить комплект", ExportBundle, true)); exports.Children.Add(Theme.Button("Отчёт Word", () => Export(true))); exports.Children.Add(Theme.Button("Таблица Excel", () => Export(false))); body.Children.Add(exports);
         }
         FrameworkElement ProfileChart()
         {
@@ -452,8 +458,21 @@ namespace MaturityApp
             DatePicker date = new DatePicker { SelectedDate = DateTime.ParseExact(assessment.Date, "yyyy-MM-dd", CultureInfo.InvariantCulture), Margin = new Thickness(0, 7, 0, 0), Height = 34, FontSize = 13 };
             date.SelectedDateChanged += (s, e) => { if (date.SelectedDate.HasValue) { assessment.Date = date.SelectedDate.Value.ToString("yyyy-MM-dd"); Changed(); } else date.SelectedDate = DateTime.ParseExact(assessment.Date, "yyyy-MM-dd", CultureInfo.InvariantCulture); };
             dateField.Children.Add(date); Grid.SetRow(dateField, 1); Grid.SetColumn(dateField, 1); fields.Children.Add(dateField); metadata.Children.Add(fields);
+            Grid additional = new Grid { Margin = new Thickness(0, 12, 0, 0) }; additional.ColumnDefinitions.Add(new ColumnDefinition()); additional.ColumnDefinitions.Add(new ColumnDefinition());
+            AddField(additional, 0, 0, "Краткое название организации", assessment.OrganizationShort, value => assessment.OrganizationShort = value);
+            AddField(additional, 0, 1, "Номер документа", assessment.DocumentNumber, value => assessment.DocumentNumber = value);
+            AddField(additional, 1, 0, "Город", assessment.City, value => assessment.City = value);
+            AddField(additional, 1, 1, "Адрес организации", assessment.OrganizationAddress, value => assessment.OrganizationAddress = value);
+            AddField(additional, 2, 0, "Должность составителя", assessment.AssessorPosition, value => assessment.AssessorPosition = value);
+            AddField(additional, 2, 1, "Должность утверждающего", assessment.ApproverPosition, value => assessment.ApproverPosition = value);
+            AddField(additional, 3, 0, "ФИО утверждающего", assessment.ApproverName, value => assessment.ApproverName = value);
+            Expander requisites = new Expander { Header = Theme.Text("Реквизиты для документов и подписи", 14, null, true), Content = additional, Margin = new Thickness(0, 0, 0, 15), IsExpanded = new[] { assessment.OrganizationShort, assessment.OrganizationAddress, assessment.City, assessment.AssessorPosition, assessment.ApproverName, assessment.ApproverPosition, assessment.DocumentNumber }.Any(x => !String.IsNullOrEmpty(x)) };
+            metadata.Children.Add(requisites);
             metadata.Children.Add(Theme.Text("Общие замечания", 12, Theme.Muted));
             TextBox notes = new TextBox { Text = assessment.Notes, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MinHeight = 70, MaxHeight = 160, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Margin = new Thickness(0, 7, 0, 0) }; notes.TextChanged += (s, e) => { assessment.Notes = notes.Text; Changed(); }; metadata.Children.Add(notes);
+            StackPanel profiles = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 14, 0, 0) };
+            profiles.Children.Add(Theme.Button("Загрузить реквизиты", LoadProfile)); profiles.Children.Add(Theme.Button("Сохранить реквизиты", SaveProfile)); metadata.Children.Add(profiles);
+            TextBlock profileHelp = Theme.Text("Реквизиты и подписанты хранятся отдельно от оценки. Их загрузка не изменяет систему, дату, ответы и цели.", 11, Theme.Muted); profileHelp.Margin = new Thickness(0, 10, 0, 0); metadata.Children.Add(profileHelp);
             body.Children.Add(Theme.Card(metadata));
             StackPanel category = new StackPanel(); category.Children.Add(Theme.Text("Категория системы и целевой уровень", 18, null, true));
             TextBlock categoryHelp = Theme.Text("Рекомендуемый минимум по п. 11 методики. Смена категории устанавливает соответствующую цель для всех направлений; затем её можно повысить отдельно.", 12, Theme.Muted); categoryHelp.Margin = new Thickness(0, 8, 0, 14); category.Children.Add(categoryHelp);
@@ -548,6 +567,11 @@ namespace MaturityApp
         {
             Summary s = Calc.Summary(assessment);
             if (s.Count == 0) { MessageBox.Show(this, "Для отчёта включите хотя бы одно направление в параметрах оценки.", "Область оценки пуста", MessageBoxButton.OK, MessageBoxImage.Information); return; }
+            if (ProjectTools.Preflight(assessment).Length > 0)
+            {
+                ExportReviewWindow review = new ExportReviewWindow(assessment, false) { Owner = this };
+                if (review.ShowDialog() != true) { if (review.GoToSettings) { page = "settings"; ShowPage(); } return; }
+            }
             SaveFileDialog dialog = new SaveFileDialog { Title = word ? "Сформировать отчёт Word" : "Выгрузить таблицу Excel", Filter = word ? "Документ Word (*.docx)|*.docx" : "Книга Excel (*.xlsx)|*.xlsx", FileName = DefaultName() + (word ? ".docx" : ".xlsx"), AddExtension = true, DefaultExt = word ? ".docx" : ".xlsx" };
             if (dialog.ShowDialog(this) != true) return;
             try
@@ -559,6 +583,44 @@ namespace MaturityApp
             }
             catch (Exception ex) { ShowError("Не удалось сформировать отчёт", ex); }
             finally { Mouse.OverrideCursor = null; }
+        }
+        void ExportBundle()
+        {
+            if (Calc.Summary(assessment).Count == 0) { MessageBox.Show(this, "Включите хотя бы одно направление в параметрах оценки.", "Область оценки пуста", MessageBoxButton.OK, MessageBoxImage.Information); return; }
+            ExportReviewWindow review = new ExportReviewWindow(assessment, true) { Owner = this };
+            if (review.ShowDialog() != true) { if (review.GoToSettings) { page = "settings"; ShowPage(); } return; }
+            SaveFileDialog dialog = new SaveFileDialog { Title = "Сохранить комплект оценки", Filter = "Архив комплекта (*.zip)|*.zip", FileName = DefaultName() + ".zip", AddExtension = true, DefaultExt = ".zip" };
+            if (dialog.ShowDialog(this) != true) return;
+            try
+            {
+                Mouse.OverrideCursor = Cursors.Wait;
+                ProjectTools.ExportBundle(assessment, dialog.FileName, review.IncludeWord, review.IncludeExcel);
+                status.Text = "Комплект сохранён: " + dialog.FileName;
+                MessageBox.Show(this, "Комплект оценки сохранён:\n" + dialog.FileName + "\n\nВнутри — проект, выбранные отчёты и описание состава комплекта.", "Комплект готов", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (Exception ex) { ShowError("Не удалось сохранить комплект", ex); }
+            finally { Mouse.OverrideCursor = null; }
+        }
+        void SaveProfile()
+        {
+            string name = "Реквизиты" + (assessment.OrganizationShort.Length > 0 ? " - " + assessment.OrganizationShort : assessment.Organization.Length > 0 ? " - " + assessment.Organization : "");
+            foreach (char ch in Path.GetInvalidFileNameChars()) name = name.Replace(ch, '_');
+            if (name.Length > 140) name = name.Substring(0, 140);
+            SaveFileDialog dialog = new SaveFileDialog { Title = "Сохранить реквизиты организации", Filter = "Реквизиты организации (*.org.json)|*.org.json", FileName = name + ".org.json", DefaultExt = ".org.json", AddExtension = true };
+            if (dialog.ShowDialog(this) != true) return;
+            try { ProjectTools.SaveProfile(assessment, dialog.FileName); status.Text = "Реквизиты сохранены: " + dialog.FileName; }
+            catch (Exception ex) { ShowError("Не удалось сохранить реквизиты", ex); }
+        }
+        void LoadProfile()
+        {
+            OpenFileDialog dialog = new OpenFileDialog { Title = "Загрузить реквизиты организации", Filter = "Реквизиты организации (*.org.json)|*.org.json|JSON (*.json)|*.json" };
+            if (dialog.ShowDialog(this) != true) return;
+            try
+            {
+                OrganizationProfile profile = ProjectTools.LoadProfile(dialog.FileName);
+                ProjectTools.ApplyProfile(assessment, profile); Changed(); ShowPage(); status.Text = "Реквизиты загружены · ответы и параметры оценки сохранены";
+            }
+            catch (Exception ex) { ShowError("Не удалось загрузить реквизиты", ex); }
         }
         void ShowError(string title, Exception ex) { MessageBox.Show(this, ex.Message, title, MessageBoxButton.OK, MessageBoxImage.Error); }
         public void RenderPreview(string targetPage, string path)
@@ -579,6 +641,54 @@ namespace MaturityApp
         public bool CanExecute(object parameter) { return true; }
         public void Execute(object parameter) { action(); }
         public event EventHandler CanExecuteChanged { add { } remove { } }
+    }
+    public class ExportReviewWindow : Window
+    {
+        public bool IncludeWord = true, IncludeExcel = true, GoToSettings;
+        public ExportReviewWindow(Assessment assessment, bool bundle)
+        {
+            Title = bundle ? "Состав комплекта оценки" : "Проверка перед выгрузкой";
+            Width = 690; MinWidth = 560; MinHeight = 420;
+            Height = Math.Max(MinHeight, Math.Min(760, SystemParameters.WorkArea.Height - 48));
+            WindowStartupLocation = WindowStartupLocation.CenterOwner; FontFamily = new FontFamily("Segoe UI"); Background = Theme.Paper;
+            Grid frame = new Grid { Margin = new Thickness(26) }; frame.RowDefinitions.Add(new RowDefinition()); frame.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); Content = frame;
+            StackPanel root = new StackPanel();
+            frame.Children.Add(new ScrollViewer { Content = root, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Padding = new Thickness(0, 0, 8, 0) });
+            root.Children.Add(Theme.Text(Title, 23, null, true));
+            TextBlock intro = Theme.Text(bundle ? "Все файлы будут сформированы из одной версии оценки и сохранены в общем ZIP-архиве." : "Проверьте сведения перед созданием отчёта. При неполной анкете результат будет помечен как предварительный.", 12, Theme.Muted); intro.Margin = new Thickness(0, 9, 0, 17); root.Children.Add(intro);
+            Summary summary = Calc.Summary(assessment);
+            TextBlock totals = Theme.Text("Направлений: " + summary.Count + " · ответов: " + summary.Answered + " из " + summary.Total + "\n" + (summary.Complete ? "Анкета заполнена" : "Предварительный результат"), 13, summary.Complete ? Theme.B("#278458") : Theme.B("#926415"), true);
+            root.Children.Add(Theme.Card(totals, new Thickness(14)));
+            if (bundle)
+            {
+                StackPanel files = new StackPanel(); files.Children.Add(Theme.Text("Состав архива", 15, null, true));
+                files.Children.Add(new CheckBox { Content = "Проект оценки (.uzi.json) — включён всегда", IsChecked = true, IsEnabled = false, Margin = new Thickness(0, 12, 0, 9) });
+                CheckBox word = new CheckBox { Content = "Отчёт Word (.docx)", IsChecked = true, Margin = new Thickness(0, 0, 0, 9) }; word.Checked += (s, e) => IncludeWord = true; word.Unchecked += (s, e) => IncludeWord = false; files.Children.Add(word);
+                CheckBox excel = new CheckBox { Content = "Таблица Excel (.xlsx)", IsChecked = true }; excel.Checked += (s, e) => IncludeExcel = true; excel.Unchecked += (s, e) => IncludeExcel = false; files.Children.Add(excel);
+                Border filesCard = Theme.Card(files, new Thickness(16)); filesCard.Margin = new Thickness(0, 14, 0, 0); root.Children.Add(filesCard);
+            }
+            string[] issues = ProjectTools.Preflight(assessment);
+            TextBlock issuesTitle = Theme.Text(issues.Length == 0 ? "Пропусков не найдено" : "Перед выгрузкой проверьте", 15, null, true); issuesTitle.Margin = new Thickness(0, 20, 0, 10); root.Children.Add(issuesTitle);
+            if (issues.Length > 0)
+            {
+                StackPanel lines = new StackPanel();
+                foreach (string issue in issues) { TextBlock line = Theme.Text("•  " + issue, 12, Theme.Muted); line.Margin = new Thickness(0, 0, 7, 10); lines.Children.Add(line); }
+                root.Children.Add(new ScrollViewer { Content = lines, MaxHeight = 190, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled });
+                TextBlock advisory = Theme.Text("Можно продолжить с текущими данными или вернуться к заполнению.", 11, Theme.Muted); advisory.Margin = new Thickness(0, 9, 0, 0); root.Children.Add(advisory);
+            }
+            StackPanel buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 22, 0, 0) };
+            buttons.Children.Add(Theme.Button("Отмена", () => { DialogResult = false; }));
+            buttons.Children.Add(Theme.Button("К параметрам", () => { GoToSettings = true; DialogResult = false; }));
+            buttons.Children.Add(Theme.Button(bundle ? "Выбрать файл…" : "Продолжить", () => { DialogResult = true; }, true)); Grid.SetRow(buttons, 1); frame.Children.Add(buttons);
+        }
+        public void RenderPreview(string path)
+        {
+            FrameworkElement content = (FrameworkElement)Content;
+            content.Measure(new Size(690, 720)); content.Arrange(new Rect(0, 0, 690, 720)); content.UpdateLayout();
+            DrawingVisual visual = new DrawingVisual(); using (DrawingContext context = visual.RenderOpen()) { context.DrawRectangle(Theme.Paper, null, new Rect(0, 0, 690, 720)); }
+            RenderTargetBitmap bitmap = new RenderTargetBitmap(690, 720, 96, 96, PixelFormats.Pbgra32); bitmap.Render(visual); bitmap.Render(content);
+            PngBitmapEncoder encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap)); using (FileStream stream = File.Create(path)) encoder.Save(stream);
+        }
     }
     public class RadarProfile : FrameworkElement
     {

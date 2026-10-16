@@ -124,10 +124,16 @@ namespace MaturityApp
             StringBuilder b = new StringBuilder("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><w:document xmlns:w=\"" + NsWord + "\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:pic=\"http://schemas.openxmlformats.org/drawingml/2006/picture\"><w:body>");
             b.Append(P("ОЦЕНКА ЗРЕЛОСТИ", "Title"));
             b.Append(P("информационной безопасности", "Subtitle"));
+            AppendOptionalWord(b, "Номер документа", a.DocumentNumber);
             b.Append(P(s.Complete ? "Оценка заполнена" : "ПРЕДВАРИТЕЛЬНЫЙ ОТЧЁТ · есть незаполненные ответы", s.Complete ? "Status" : "Warning"));
             b.Append(P("Организация: " + Empty(a.Organization), null));
+            AppendOptionalWord(b, "Краткое наименование", a.OrganizationShort);
+            AppendOptionalWord(b, "Адрес организации", a.OrganizationAddress);
+            AppendOptionalWord(b, "Город", a.City);
             b.Append(P("Система / объект оценки: " + Empty(a.SystemName), null));
             b.Append(P("Оценку выполнил: " + Empty(a.Assessor), null));
+            AppendOptionalWord(b, "Должность составителя", a.AssessorPosition);
+            AppendOptionalWord(b, "Для утверждения", Person(a.ApproverPosition, a.ApproverName));
             b.Append(P("Дата оценки: " + DateText(a.Date) + "    Категория: " + CategoryText(a.Category), null));
             b.Append(P("1. Сводные результаты", "Heading1"));
             b.Append(P("Включено направлений: " + s.Count + ". Заполнено ответов: " + s.Answered + " из " + s.Total + ". Достигнута цель: " + s.Met + " из " + s.Count + ".", null));
@@ -175,6 +181,14 @@ namespace MaturityApp
             b.Append(P("4. Основание и ограничения", "Heading1"));
             b.Append(P(MethodNote(), "Small"));
             b.Append(P("Источник: " + Data.SourceUrl + ". Дата версии методики: " + Data.MethodDate + ".", "Small"));
+            if (!String.IsNullOrWhiteSpace(a.Assessor) || !String.IsNullOrWhiteSpace(a.AssessorPosition) || !String.IsNullOrWhiteSpace(a.ApproverName) || !String.IsNullOrWhiteSpace(a.ApproverPosition))
+            {
+                b.Append(P("Подписи", "Heading1"));
+                if (!String.IsNullOrWhiteSpace(a.Assessor) || !String.IsNullOrWhiteSpace(a.AssessorPosition))
+                    b.Append(SignatureBlock("Составил", a.AssessorPosition, a.Assessor));
+                if (!String.IsNullOrWhiteSpace(a.ApproverName) || !String.IsNullOrWhiteSpace(a.ApproverPosition))
+                    b.Append(SignatureBlock("УТВЕРЖДАЮ", a.ApproverPosition, a.ApproverName));
+            }
             b.Append("<w:sectPr><w:footerReference w:type=\"default\" r:id=\"rFooter\"/><w:pgSz w:w=\"11906\" w:h=\"16838\"/><w:pgMar w:top=\"1000\" w:right=\"850\" w:bottom=\"1000\" w:left=\"1000\" w:header=\"400\" w:footer=\"400\"/><w:cols w:space=\"708\"/></w:sectPr></w:body></w:document>");
             return b.ToString();
         }
@@ -182,28 +196,46 @@ namespace MaturityApp
         private static string SummarySheet(Assessment a, Summary s)
         {
             StringBuilder rows = new StringBuilder();
+            List<string> mergedRanges = new List<string> { "A1:I1", "A2:B2", "C2:I2", "A3:B3", "C3:I3", "A4:B4", "C4:D4", "F4:G4" };
             rows.Append(Row(1, T("A1", "ОЦЕНКА ЗРЕЛОСТИ ИНФОРМАЦИОННОЙ БЕЗОПАСНОСТИ", 1), 30));
             rows.Append(Row(2, T("A2", "Организация", 4) + T("C2", Empty(a.Organization), 0), 32));
             rows.Append(Row(3, T("A3", "Система / объект", 4) + T("C3", Empty(a.SystemName), 0), 32));
             rows.Append(Row(4, T("A4", "Оценку выполнил", 4) + T("C4", Empty(a.Assessor), 0) + T("E4", "Дата", 4) + T("F4", DateText(a.Date), 0) + T("H4", "Категория", 4) + (a.Category == 0 ? T("I4", "Не определена", 0) : N("I4", a.Category, 3)), 32));
-            rows.Append(Row(5, T("A5", s.Complete ? "Оценка заполнена" : "ПРЕДВАРИТЕЛЬНО: есть незаполненные ответы", s.Complete ? 6 : 7), 26));
-            rows.Append(Row(6, T("A6", "Направлений: " + s.Count + ". Ответов: " + s.Answered + " / " + s.Total + ". Цель достигнута: " + s.Met + " / " + s.Count + ".", 4), 30));
-            rows.Append(Row(7, T("A7", "Средний уровень: " + s.Average.ToString("0.00", Inv) + ". Средняя цель: " + s.TargetAverage.ToString("0.00", Inv) + ". Общий уровень: " + ((int)Math.Floor(s.Average)) + " — " + Calc.LevelName((int)Math.Floor(s.Average)) + ".", 5), 30));
-            rows.Append(Row(8, HeaderCells(new string[] { "№", "Направление", "Статус", "P", "Уровень", "Цель", "Разрыв", "Ответы", "Всего" }, 8), 30));
+            int nextRow = 5;
+            AppendOptionalExcel(rows, mergedRanges, ref nextRow, "Краткое наименование", a.OrganizationShort);
+            AppendOptionalExcel(rows, mergedRanges, ref nextRow, "Адрес организации", a.OrganizationAddress);
+            AppendOptionalExcel(rows, mergedRanges, ref nextRow, "Город", a.City);
+            AppendOptionalExcel(rows, mergedRanges, ref nextRow, "Должность составителя", a.AssessorPosition);
+            AppendOptionalExcel(rows, mergedRanges, ref nextRow, "Номер документа", a.DocumentNumber);
+            AppendOptionalExcel(rows, mergedRanges, ref nextRow, "Для утверждения: ФИО", a.ApproverName);
+            AppendOptionalExcel(rows, mergedRanges, ref nextRow, "Для утверждения: должность", a.ApproverPosition);
+            int statusRow = nextRow++, countRow = nextRow++, averageRow = nextRow++, headerRow = nextRow;
+            rows.Append(Row(statusRow, T("A" + statusRow, s.Complete ? "Оценка заполнена" : "ПРЕДВАРИТЕЛЬНО: есть незаполненные ответы", s.Complete ? 6 : 7), 26));
+            rows.Append(Row(countRow, T("A" + countRow, "Направлений: " + s.Count + ". Ответов: " + s.Answered + " / " + s.Total + ". Цель достигнута: " + s.Met + " / " + s.Count + ".", 4), 30));
+            rows.Append(Row(averageRow, T("A" + averageRow, "Средний уровень: " + s.Average.ToString("0.00", Inv) + ". Средняя цель: " + s.TargetAverage.ToString("0.00", Inv) + ". Общий уровень: " + ((int)Math.Floor(s.Average)) + " — " + Calc.LevelName((int)Math.Floor(s.Average)) + ".", 5), 30));
+            mergedRanges.Add("A" + statusRow + ":I" + statusRow);
+            mergedRanges.Add("A" + countRow + ":I" + countRow);
+            mergedRanges.Add("A" + averageRow + ":I" + averageRow);
+            rows.Append(Row(headerRow, HeaderCells(new string[] { "№", "Направление", "Статус", "P", "Уровень", "Цель", "Разрыв", "Ответы", "Всего" }, headerRow), 30));
             for (int i = 0; i < Data.DirectionNames.Length; i++)
             {
-                int row = 9 + i; DirectionAssessment d = GetDirection(a, i); DirectionResult r = Calc.Direction(d); int st = d.Included ? 0 : 8;
+                int row = headerRow + 1 + i; DirectionAssessment d = GetDirection(a, i); DirectionResult r = Calc.Direction(d); int st = d.Included ? 0 : 8;
                 string cells = N("A" + row, i + 1, 3) + T("B" + row, Data.DirectionNames[i], st) + T("C" + row, d.Included ? (r.Complete ? "Заполнено" : "Частично") : "Исключено", d.Included ? (r.Complete ? 6 : 7) : 8);
                 cells += d.Included ? N("D" + row, r.Score, 9) + N("E" + row, r.Level, 3) : T("D" + row, "—", 8) + T("E" + row, "—", 8);
                 cells += N("F" + row, d.Target, 3) + (d.Included ? N("G" + row, r.Gap, r.Gap > 0 ? 10 : 3) + N("H" + row, r.Answered, 3) + N("I" + row, Data.Criteria.Length, 3) : T("G" + row, "—", 8) + T("H" + row, "—", 8) + T("I" + row, "—", 8));
                 rows.Append(Row(row, cells, 42));
             }
-            int end = 8 + Data.DirectionNames.Length;
+            int end = headerRow + Data.DirectionNames.Length;
             rows.Append(Row(end + 2, T("A" + (end + 2), "Примечания: " + Empty(a.Notes), 0), 70));
             rows.Append(Row(end + 4, T("A" + (end + 4), MethodNote(), 5), 75));
             rows.Append(Row(end + 5, T("A" + (end + 5), "Источник: " + Data.SourceUrl + " · Версия методики: " + Data.MethodDate, 5), 30));
-            string merges = "<mergeCells count=\"14\"><mergeCell ref=\"A1:I1\"/><mergeCell ref=\"A2:B2\"/><mergeCell ref=\"C2:I2\"/><mergeCell ref=\"A3:B3\"/><mergeCell ref=\"C3:I3\"/><mergeCell ref=\"A4:B4\"/><mergeCell ref=\"C4:D4\"/><mergeCell ref=\"F4:G4\"/><mergeCell ref=\"A5:I5\"/><mergeCell ref=\"A6:I6\"/><mergeCell ref=\"A7:I7\"/><mergeCell ref=\"A" + (end + 2) + ":I" + (end + 2) + "\"/><mergeCell ref=\"A" + (end + 4) + ":I" + (end + 4) + "\"/><mergeCell ref=\"A" + (end + 5) + ":I" + (end + 5) + "\"/></mergeCells>";
-            return Sheet(rows, "A1:I" + (end + 5), "<col min=\"1\" max=\"1\" width=\"8\" customWidth=\"1\"/><col min=\"2\" max=\"2\" width=\"53\" customWidth=\"1\"/><col min=\"3\" max=\"3\" width=\"18\" customWidth=\"1\"/><col min=\"4\" max=\"9\" width=\"13\" customWidth=\"1\"/>", 8, "A8:I" + end, merges, false);
+            mergedRanges.Add("A" + (end + 2) + ":I" + (end + 2));
+            mergedRanges.Add("A" + (end + 4) + ":I" + (end + 4));
+            mergedRanges.Add("A" + (end + 5) + ":I" + (end + 5));
+            StringBuilder merges = new StringBuilder("<mergeCells count=\"" + mergedRanges.Count + "\">");
+            foreach (string range in mergedRanges) merges.Append("<mergeCell ref=\"" + range + "\"/>");
+            merges.Append("</mergeCells>");
+            return Sheet(rows, "A1:I" + (end + 5), "<col min=\"1\" max=\"1\" width=\"8\" customWidth=\"1\"/><col min=\"2\" max=\"2\" width=\"53\" customWidth=\"1\"/><col min=\"3\" max=\"3\" width=\"18\" customWidth=\"1\"/><col min=\"4\" max=\"9\" width=\"13\" customWidth=\"1\"/>", headerRow, "A" + headerRow + ":I" + end, merges.ToString(), false);
         }
 
         private static string AnswersSheet(Assessment a)
@@ -298,6 +330,32 @@ namespace MaturityApp
         {
             string t = E(text ?? "").Replace("\r\n", "\n").Replace("\r", "\n").Replace("\n", "</w:t><w:br/><w:t xml:space=\"preserve\">");
             return "<w:p>" + (style == null ? "" : "<w:pPr><w:pStyle w:val=\"" + style + "\"/></w:pPr>") + "<w:r><w:t xml:space=\"preserve\">" + t + "</w:t></w:r></w:p>";
+        }
+        private static void AppendOptionalWord(StringBuilder b, string label, string value)
+        {
+            if (!String.IsNullOrWhiteSpace(value)) b.Append(P(label + ": " + value, null));
+        }
+        private static void AppendOptionalExcel(StringBuilder rows, List<string> merges, ref int row, string label, string value)
+        {
+            if (String.IsNullOrWhiteSpace(value)) return;
+            rows.Append(Row(row, T("A" + row, label, 4) + T("C" + row, value, 0), 32));
+            merges.Add("A" + row + ":B" + row);
+            merges.Add("C" + row + ":I" + row);
+            row++;
+        }
+        private static string Person(string position, string name)
+        {
+            if (String.IsNullOrWhiteSpace(position)) return name ?? "";
+            if (String.IsNullOrWhiteSpace(name)) return position;
+            return position + ", " + name;
+        }
+        private static string SignatureBlock(string label, string position, string name)
+        {
+            StringBuilder b = new StringBuilder(P(label, "Heading2"));
+            if (!String.IsNullOrWhiteSpace(position)) b.Append(P(position, null).Replace("<w:p>", "<w:p><w:pPr><w:keepNext/></w:pPr>"));
+            if (!String.IsNullOrWhiteSpace(name)) b.Append(P(name, null).Replace("<w:p>", "<w:p><w:pPr><w:keepNext/></w:pPr>"));
+            b.Append(P("Подпись ____________________    Дата ____________________", null));
+            return b.ToString();
         }
         private static string PageBreak() { return "<w:p><w:r><w:br w:type=\"page\"/></w:r></w:p>"; }
         private static string TableStart(int[] widths)
