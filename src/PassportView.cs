@@ -93,7 +93,7 @@ namespace MaturityApp
             body.Children.Add(new Expander { Header = "Справка о вариантах подключения · источник и дата проверки", Content = Theme.Card(reference, new Thickness(16)), Margin = new Thickness(0, 0, 0, 14) });
 
             StackPanel extra = new StackPanel { Margin = new Thickness(0, 9, 0, 0) };
-            TextBlock extraHelp = Theme.Text("Одна кнопка ниже указывает отсутствие домена, Wi-Fi, мобильных устройств, удалённого администрирования, собственной разработки ПО и ИИ. Она не исключает направления из оценки.", 12, Theme.Muted); extra.Children.Add(extraHelp);
+            TextBlock extraHelp = Theme.Text("Одна кнопка ниже указывает отсутствие домена, Wi-Fi, мобильных устройств, удалённого администрирования, собственной разработки ПО и ИИ. Сама она не исключает направления: для этого на вкладке «Оценка» появится кнопка «Исключить по паспорту».", 12, Theme.Muted); extra.Children.Add(extraHelp);
             List<ComboBox> technologyChoices = new List<ComboBox>();
             Button simple = Theme.Button("Эти шесть технологий не используются", () => {
                 p.Domain = p.Wireless = p.Mobile = p.RemoteAdministration = p.OwnDevelopment = p.ArtificialIntelligence = false;

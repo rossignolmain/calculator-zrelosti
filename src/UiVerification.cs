@@ -54,6 +54,9 @@ namespace MaturityApp
                 Test("fast bundle exports and updates the preset ZIP without dialogs", FastBundle);
                 Test("opened bundle stays associated with ZIP for the next one click save", ReopenedBundle);
                 Test("empty scope disables the fast bundle button", EmptyScope);
+                Test("common row fills 168 cells in 8 clicks and keeps individual differences", CommonRow);
+                Test("passport exclusion is an explicit command and keeps answers", PassportExclusion);
+                Test("answer template carries grades, scope and goals but no requisites", AnswerTemplateRoundTrip);
             }
             finally
             {
@@ -142,7 +145,7 @@ namespace MaturityApp
             Assessment a = Assessment.Create(); MainWindow window = Create(a);
             Assert((string)Get(window, "page") == "quick", "Quick assessment is not the initial page.");
             Assert(Rows(window).Count == 21, "The quick table must contain 21 directions.");
-            Assert(Tree((DependencyObject)window.Content).OfType<QuickAnswerCell>().Count() == 168, "The attached control tree must contain 168 answer cells.");
+            Assert(Tree((DependencyObject)window.Content).OfType<QuickAnswerCell>().Count() == 168 + 8, "The attached control tree must contain 168 answer cells and 8 common cells.");
             Assert(a.Directions.All(d => d.Answers.All(x => !x.HasValue)), "Creating or measuring the UI filled answers.");
             Assert(window.MinWidth <= 1100, "The declared minimum width exceeds 1100px.");
             QuickRowView first = Rows(window)[0]; FrameworkElement content = (FrameworkElement)window.Content;
@@ -365,6 +368,65 @@ namespace MaturityApp
             Assessment a = Assessment.Create(); foreach (DirectionAssessment d in a.Directions) d.Included = false; MainWindow window = Create(a);
             Assert(!((Button)Get(window, "bundleButton")).IsEnabled, "Fast save is enabled for an empty assessment scope.");
             Assert(a.Directions.All(d => d.Answers.All(x => !x.HasValue)), "Empty-scope UI populated answers.");
+        }
+        static List<QuickAnswerCell> Common(MainWindow window) { return (List<QuickAnswerCell>)Get(window, "commonCells"); }
+        static void CommonRow()
+        {
+            Assessment a = Assessment.Create(); a.Directions[20].Included = false; MainWindow window = Create(a);
+            Assert(Common(window).Count == 8, "The common row must have eight cells.");
+            Assert(Common(window).All(c => c.ActualHeight > 20) && Rows(window)[0].Cells[0].ActualHeight > 20, "The common row or the first direction row has no visible height.");
+            for (int j = 0; j < 8; j++) Click(AnswerButton(Common(window)[j], j, .5));
+            Assert(a.Directions.Take(20).All(d => d.Answers.All(x => x == .5)), "Eight common clicks did not fill every included cell.");
+            Assert(a.Directions[20].Answers.All(x => !x.HasValue), "The common row touched an excluded direction.");
+            Click(AnswerButton(Rows(window)[3].Cells[0], 0, 0));
+            Assert(Rows(window)[3].Cells[0].Background != Brushes.Transparent && Rows(window)[4].Cells[0].Background == Brushes.Transparent, "A differing grade is not highlighted.");
+            Click(AnswerButton(Common(window)[0], 0, 1));
+            Assert(a.Directions[3].Answers[0] == 0 && a.Directions.Take(20).Where(d => d.Id != 4).All(d => d.Answers[0] == 1), "Changing the common answer overwrote an individual difference or missed followers.");
+            Assert(QuickInput.CommonValue(a, 0) == 1, "The common value is not the majority answer.");
+            Click(AnswerButton(Common(window)[0], 0, 1));
+            Assert(a.Directions[3].Answers[0] == 0, "A repeated common click cleared or overwrote answers.");
+            Click(AnswerButton(Common(window)[0], 0, .5));
+            Call(window, "UndoCopiedAnswers");
+            Assert(a.Directions[3].Answers[0] == 0 && a.Directions.Take(20).Where(d => d.Id != 4).All(d => d.Answers[0] == 1), "Undo of a common change failed.");
+            Assert(Calc.Summary(a).Answered == 160, "Common row changed the number of answers unexpectedly.");
+        }
+        static void PassportExclusion()
+        {
+            Assessment a = Assessment.Create(); a.Passport = SystemPassports.CreateSingleArm(); a.Directions[7].Answers[0] = 1;
+            MainWindow window = Create(a);
+            Func<Button> find = () => Tree((DependencyObject)window.Content).OfType<Button>().SingleOrDefault(b => (b.Content as string ?? "").StartsWith("Исключить по паспорту"));
+            Assert(find() == null, "Unknown technologies offered an exclusion.");
+            a.Passport.Mobile = false; a.Passport.Wireless = false; a.Passport.RemoteAdministration = false; a.Passport.OwnDevelopment = false; a.Passport.ArtificialIntelligence = false; a.Passport.Domain = false;
+            Page(window, "quick");
+            Assert(a.Directions.All(d => d.Included), "Opening the page excluded directions without a command.");
+            Button exclude = find(); Assert(exclude != null && (string)exclude.Content == "Исключить по паспорту: 8, 9, 10, 13, 19", "Passport exclusion offers the wrong directions.");
+            Click(exclude); Layout(window);
+            int[] off = a.Directions.Where(d => !d.Included).Select(d => d.Id).ToArray();
+            Assert(String.Join(",", off) == "8,9,10,13,19", "Passport exclusion changed the wrong scope.");
+            Assert(a.Directions[7].Answers[0] == 1, "Exclusion deleted an answer.");
+            Assert(find() == null, "The exclusion is still offered after it was applied.");
+        }
+        static void AnswerTemplateRoundTrip()
+        {
+            Assessment a = Assessment.Create(); a.Organization = "Организация А"; a.Category = 2; foreach (DirectionAssessment d in a.Directions) d.Target = 2;
+            a.Directions[0].Answers = new double?[] { 1, .5, 0, 1, .5, .3, 0, 1 }; a.Directions[12].Included = false; a.Directions[2].Target = 4; a.Directions[0].Evidence = "Документ А";
+            a.Passport = SystemPassports.CreateSingleArm();
+            string path = Path.Combine(outputFolder, "ui-template.answers.json");
+            AnswerTemplates.Save(AnswerTemplates.Create(a, "Школы"), path);
+            string json = File.ReadAllText(path, Encoding.UTF8);
+            Assert(!json.Contains("Организация А") && !json.Contains("Документ А") && !json.Contains("Workstations"), "The template leaked requisites, evidence or passport.");
+            Assessment b = Assessment.Create(); b.Organization = "Организация Б"; b.Directions[0].Evidence = "Документ Б";
+            AnswerTemplate t = AnswerTemplates.Load(path); AnswerTemplates.Apply(b, t);
+            Assert(t.Name == "Школы", "Template name was lost.");
+            Assert(b.Category == 2 && b.Directions[2].Target == 4 && !b.Directions[12].Included && b.Directions[0].Answers[5] == .3 && !b.Directions[1].Answers[0].HasValue, "Template did not restore grades, scope, category or goals.");
+            Assert(b.Organization == "Организация Б" && b.Directions[0].Evidence == "Документ Б", "Applying a template changed requisites or evidence.");
+            bool rejected = false;
+            try { AnswerTemplates.Parse(json.Replace("0.3", "0.7")); } catch (InvalidDataException) { rejected = true; }
+            Assert(rejected, "An invalid grade in a template was accepted.");
+            rejected = false;
+            try { AnswerTemplates.Parse(Store.Serialize(a)); } catch (InvalidDataException) { rejected = true; }
+            Assert(rejected, "A project file was accepted as an answer template.");
+            report.generatedFiles.Add(path);
         }
     }
 }

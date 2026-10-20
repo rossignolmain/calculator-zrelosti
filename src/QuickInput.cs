@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
+using System.Web.Script.Serialization;
 
 namespace MaturityApp
 {
@@ -125,6 +127,50 @@ namespace MaturityApp
             return count;
         }
 
+        // The most frequent answer among included directions; ties go to the lower option.
+        // Null when no included direction has an answer for this criterion.
+        public static double? CommonValue(Assessment a, int criterion)
+        {
+            if (criterion < 0 || criterion >= Data.Criteria.Length) throw new ArgumentOutOfRangeException("criterion");
+            var groups = a.Directions.Where(d => d.Included && d.Answers[criterion].HasValue)
+                .GroupBy(d => d.Answers[criterion].Value).OrderByDescending(g => g.Count()).ThenBy(g => g.Key).ToArray();
+            return groups.Length == 0 ? (double?)null : groups[0].Key;
+        }
+
+        // Sets a criterion for every included direction that is empty or still follows the
+        // current common value. Directions that were answered differently keep their grade.
+        public static List<AnswerChange> SetCommonValue(Assessment a, int criterion, double value)
+        {
+            if (criterion < 0 || criterion >= Data.Criteria.Length) throw new ArgumentOutOfRangeException("criterion");
+            ValidateStructure(a);
+            if (!Allowed(criterion, value)) throw new ArgumentOutOfRangeException("value", "Оценка недопустима для выбранного критерия.");
+            double? common = CommonValue(a, criterion);
+            List<AnswerChange> changes = new List<AnswerChange>();
+            foreach (DirectionAssessment d in a.Directions.Where(x => x.Included).OrderBy(x => x.Id))
+            {
+                double? before = d.Answers[criterion];
+                bool follows = !before.HasValue || common.HasValue && Math.Abs(before.Value - common.Value) < 1e-10;
+                if (!follows || before.HasValue && Math.Abs(before.Value - value) < 1e-10) continue;
+                changes.Add(new AnswerChange { DirectionId = d.Id, Criterion = criterion, Before = before, After = value });
+            }
+            Dictionary<int, DirectionAssessment> destinations = a.Directions.ToDictionary(d => d.Id);
+            foreach (AnswerChange change in changes) destinations[change.DirectionId].Answers[change.Criterion] = change.After;
+            return changes;
+        }
+
+        // Directions whose technology the passport explicitly marks as unused. Unknown never counts.
+        public static int[] PassportInapplicable(SystemPassport p)
+        {
+            if (p == null) return new int[0];
+            List<int> ids = new List<int>();
+            if (p.Mobile == false) ids.Add(8);
+            if (p.RemoteAdministration == false) ids.Add(9);
+            if (p.Wireless == false) ids.Add(10);
+            if (p.OwnDevelopment == false) ids.Add(13);
+            if (p.ArtificialIntelligence == false) ids.Add(19);
+            return ids.ToArray();
+        }
+
         static bool Allowed(int criterion, double? answer)
         {
             return !answer.HasValue || Data.Criteria[criterion].Options.Any(o => Math.Abs(o.Value - answer.Value) < 1e-10);
@@ -142,5 +188,87 @@ namespace MaturityApp
                     if (!Allowed(criterion, direction.Answers[criterion])) throw new InvalidDataException("Недопустимая оценка критерия.");
             }
         }
+    }
+
+    public class TemplateDirection
+    {
+        public int Id;
+        public bool Included = true;
+        public int Target = 1;
+        public double?[] Answers = new double?[8];
+    }
+    public class AnswerTemplate
+    {
+        public string Format = "", Name = "";
+        public int Version = 1, Category = 1;
+        public TemplateDirection[] Directions;
+    }
+
+    // A reusable set of grades, scope, category and targets. Organization requisites,
+    // passport and evidence are per object and never enter a template.
+    public static class AnswerTemplates
+    {
+        const string TemplateFormat = "maturity-answers";
+        const int MaximumFileLength = 1024 * 1024;
+
+        public static AnswerTemplate Create(Assessment a, string name)
+        {
+            Store.Validate(a);
+            return new AnswerTemplate {
+                Format = TemplateFormat, Name = name ?? "", Category = a.Category,
+                Directions = a.Directions.Select(d => new TemplateDirection { Id = d.Id, Included = d.Included, Target = d.Target, Answers = (double?[])d.Answers.Clone() }).ToArray()
+            };
+        }
+
+        // Validates through a scratch assessment first, so a bad template never partially applies.
+        public static void Apply(Assessment a, AnswerTemplate t)
+        {
+            if (a == null) throw new ArgumentNullException("a");
+            Assessment check = Assessment.Create(); check.Category = t.Category;
+            if (t.Directions == null || t.Directions.Length != 21) throw new InvalidDataException("В шаблоне должны быть данные по 21 направлению.");
+            check.Directions = t.Directions.Select(d => d == null ? null : new DirectionAssessment { Id = d.Id, Included = d.Included, Target = d.Target, Answers = d.Answers == null ? null : (double?[])d.Answers.Clone() }).ToArray();
+            Store.Validate(check);
+            a.Category = check.Category;
+            foreach (DirectionAssessment source in check.Directions)
+            {
+                DirectionAssessment d = a.Directions.First(x => x.Id == source.Id);
+                d.Included = source.Included; d.Target = source.Target; d.Answers = source.Answers;
+            }
+        }
+
+        public static string Serialize(AnswerTemplate t) { return Serializer().Serialize(t); }
+        public static AnswerTemplate Parse(string json)
+        {
+            if (String.IsNullOrWhiteSpace(json) || json.Length > MaximumFileLength) throw new InvalidDataException("Пустой или слишком большой файл шаблона оценок.");
+            AnswerTemplate t;
+            try { t = Serializer().Deserialize<AnswerTemplate>(json); }
+            catch (Exception ex)
+            {
+                if (!(ex is ArgumentException) && !(ex is InvalidOperationException)) throw;
+                throw new InvalidDataException("Не удалось прочитать шаблон оценок: некорректный JSON.", ex);
+            }
+            if (t == null || t.Format != TemplateFormat || t.Version != 1) throw new InvalidDataException("Нужен шаблон оценок версии 1 (.answers.json).");
+            Apply(Assessment.Create(), t); // validation only
+            return t;
+        }
+        public static AnswerTemplate Load(string path)
+        {
+            if (new FileInfo(path).Length > MaximumFileLength) throw new InvalidDataException("Файл шаблона оценок слишком большой.");
+            return Parse(File.ReadAllText(path, new UTF8Encoding(false, true)));
+        }
+        public static void Save(AnswerTemplate t, string path)
+        {
+            string json = Serialize(t);
+            string full = Path.GetFullPath(path), folder = Path.GetDirectoryName(full);
+            Directory.CreateDirectory(folder);
+            string temp = Path.Combine(folder, "." + Path.GetFileName(full) + "." + Guid.NewGuid().ToString("N") + ".tmp");
+            try
+            {
+                File.WriteAllText(temp, json, new UTF8Encoding(false));
+                if (File.Exists(full)) File.Replace(temp, full, null); else File.Move(temp, full);
+            }
+            finally { if (File.Exists(temp)) File.Delete(temp); }
+        }
+        static JavaScriptSerializer Serializer() { return new JavaScriptSerializer { MaxJsonLength = MaximumFileLength, RecursionLimit = 32 }; }
     }
 }

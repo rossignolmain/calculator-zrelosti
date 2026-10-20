@@ -1,16 +1,20 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using Microsoft.Win32;
 
 namespace MaturityApp
 {
     public partial class MainWindow
     {
+        readonly List<QuickAnswerCell> commonCells = new List<QuickAnswerCell>();
+
         void BuildQuickAssessment()
         {
             Grid root = new Grid(); root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); root.RowDefinitions.Add(new RowDefinition()); root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); center.Children.Add(root);
@@ -35,6 +39,18 @@ namespace MaturityApp
             };
             categoryField.Children.Add(category); Grid.SetColumn(categoryField, 2); info.Children.Add(categoryField);
             top.Children.Add(Theme.Card(info, new Thickness(14, 11, 14, 12)));
+            WrapPanel tools = new WrapPanel { Margin = new Thickness(0, 10, 0, 0) };
+            Button loadTemplate = Theme.Button("Заполнить из шаблона…", LoadAnswerTemplate); loadTemplate.ToolTip = "Ответы, область оценки, категория и цели из файла .answers.json. Реквизиты, паспорт и материалы не меняются."; tools.Children.Add(loadTemplate);
+            Button saveTemplate = Theme.Button("Сохранить ответы как шаблон…", SaveAnswerTemplate); saveTemplate.ToolTip = "Сохраняет только оценки, область, категорию и цели — без организации и подтверждающих материалов."; tools.Children.Add(saveTemplate);
+            int[] inapplicable = QuickInput.PassportInapplicable(assessment.Passport).Where(id => assessment.Directions[id - 1].Included).ToArray();
+            if (inapplicable.Length > 0)
+            {
+                Button exclude = Theme.Button("Исключить по паспорту: " + String.Join(", ", inapplicable), () => ExcludeByPassport(inapplicable));
+                exclude.ToolTip = "В паспорте указано, что технология не используется:\n" + String.Join("\n", inapplicable.Select(id => id + ". " + Data.DirectionNames[id - 1])) + "\n\nОтветы сохранятся; вернуть направление можно галочкой в таблице.";
+                tools.Children.Add(exclude);
+            }
+            foreach (Button b in tools.Children.OfType<Button>()) { b.Padding = new Thickness(12, 6, 12, 6); b.FontSize = 12; }
+            top.Children.Add(tools);
             Grid summary = new Grid { Margin = new Thickness(0, 12, 0, 10) }; summary.ColumnDefinitions.Add(new ColumnDefinition()); summary.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             StackPanel score = new StackPanel { Orientation = Orientation.Horizontal };
             quickScore = Theme.Text("Узи —", 18, Theme.Blue, true); score.Children.Add(quickScore);
@@ -74,7 +90,22 @@ namespace MaturityApp
                 AddMatrixHeader(headers, j + 2, name, Data.Criteria[j].Name + "\n" + Data.Criteria[j].Description + "\n\n" + String.Join("\n\n", Data.Criteria[j].Options.Select(o => Calc.F(o.Value) + " — " + o.Text)));
             }
             AddMatrixHeader(headers, 10, "Уровень", "Текущий уровень и число ответов в направлении"); AddMatrixHeader(headers, 11, "Цель", "Целевой уровень направления"); table.Children.Add(headers);
-            StackPanel rows = new StackPanel(); ScrollViewer scroll = new ScrollViewer { Content = rows, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled }; Grid.SetRow(scroll, 1); table.Children.Add(scroll);
+            table.RowDefinitions.Insert(1, new RowDefinition { Height = GridLength.Auto });
+            Grid commonRow = MatrixGrid(); commonRow.Margin = new Thickness(0, 0, 17, 0); commonRow.Background = Theme.B("#F0F5FE"); commonRow.MinHeight = 52;
+            StackPanel commonTitle = new StackPanel { Margin = new Thickness(7, 6, 8, 6), VerticalAlignment = VerticalAlignment.Center };
+            commonTitle.Children.Add(Theme.Text("Общий ответ для всех направлений", 12, Theme.Blue, true));
+            commonTitle.Children.Add(Theme.Text("Отличия правьте в строках ниже — они сохранятся", 10.5, Theme.Muted));
+            Grid.SetColumn(commonTitle, 1); commonRow.Children.Add(commonTitle);
+            commonCells.Clear();
+            for (int j = 0; j < 8; j++)
+            {
+                int criterion = j;
+                QuickAnswerCell cell = QuickAnswerCell.Common(j, () => QuickInput.CommonValue(assessment, criterion), value => ApplyCommonValue(criterion, value), description => { if (quickHint != null) quickHint.Text = description; });
+                commonCells.Add(cell); Grid.SetColumn(cell, j + 2); commonRow.Children.Add(cell);
+            }
+            Border commonLine = new Border { Height = 2, Background = Theme.B("#C9D8F2"), VerticalAlignment = VerticalAlignment.Bottom, IsHitTestVisible = false }; Grid.SetColumnSpan(commonLine, 12); commonRow.Children.Add(commonLine);
+            Grid.SetRow(commonRow, 1); table.Children.Add(commonRow);
+            StackPanel rows = new StackPanel(); ScrollViewer scroll = new ScrollViewer { Content = rows, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled }; Grid.SetRow(scroll, 2); table.Children.Add(scroll);
             foreach (DirectionAssessment d in assessment.Directions)
             {
                 DirectionAssessment item = d; Grid row = MatrixGrid(); row.Background = d.Id % 2 == 0 ? Theme.B("#F8FAFD") : Brushes.White; row.MinHeight = 52;
@@ -87,7 +118,7 @@ namespace MaturityApp
                 for (int j = 0; j < 8; j++)
                 {
                     int criterion = j;
-                    QuickAnswerCell cell = new QuickAnswerCell(d, j, () => { ForgetCopiedAnswer(item.Id, criterion); Changed(); UpdateNumbers(); }, description => { if (quickHint != null) quickHint.Text = description; });
+                    QuickAnswerCell cell = new QuickAnswerCell(d, j, () => { ForgetCopiedAnswer(item.Id, criterion); Changed(); UpdateNumbers(); }, description => { if (quickHint != null) quickHint.Text = description; }, () => QuickInput.CommonValue(assessment, criterion));
                     view.Cells[j] = cell; Grid.SetColumn(cell, j + 2); row.Children.Add(cell);
                 }
                 view.Level = Theme.Text("", 12, Theme.Blue, true); view.Level.TextAlignment = TextAlignment.Center; Grid.SetColumn(view.Level, 10); row.Children.Add(view.Level);
@@ -118,6 +149,56 @@ namespace MaturityApp
             if (col >= 2 && col <= 9) { int criterion = col - 2; cell.Cursor = Cursors.Hand; cell.MouseLeftButtonUp += (s, e) => { SelectMassCriterion(criterion); if (massExpander != null) massExpander.IsExpanded = true; }; }
             Grid.SetColumn(cell, col); grid.Children.Add(cell);
         }
+        void ApplyCommonValue(int criterion, double value)
+        {
+            List<AnswerChange> changes = QuickInput.SetCommonValue(assessment, criterion, value);
+            if (changes.Count == 0) { status.Text = "Общий ответ уже стоит во всех подходящих ячейках. Отличающиеся направления не изменены."; UpdateNumbers(); return; }
+            copiedAnswers = changes; Changed(); UpdateNumbers();
+            int kept = assessment.Directions.Count(d => d.Included && d.Answers[criterion].HasValue && Math.Abs(d.Answers[criterion].Value - value) > 1e-10);
+            status.Text = Data.Criteria[criterion].Name + " = " + Calc.F(value) + ": заполнено " + changes.Count + " яч." + (kept > 0 ? " Отличия сохранены: " + kept + "." : "") + " Действие можно отменить.";
+        }
+        void ExcludeByPassport(int[] ids)
+        {
+            foreach (int id in ids) assessment.Directions[id - 1].Included = false;
+            Changed(); ShowPage();
+            status.Text = "Исключены по паспорту: " + String.Join(", ", ids) + ". Ответы сохранены; вернуть можно галочкой в таблице.";
+        }
+        void SaveAnswerTemplate()
+        {
+            SaveFileDialog dialog = new SaveFileDialog { Title = "Сохранить ответы как шаблон", Filter = "Шаблон оценок (*.answers.json)|*.answers.json", FileName = "Типовые оценки.answers.json", AddExtension = true, DefaultExt = ".answers.json", InitialDirectory = TemplateFolder() };
+            if (dialog.ShowDialog(this) != true) return;
+            try
+            {
+                string name = Path.GetFileName(dialog.FileName); name = name.EndsWith(".answers.json", StringComparison.OrdinalIgnoreCase) ? name.Substring(0, name.Length - 13) : Path.GetFileNameWithoutExtension(name);
+                AnswerTemplates.Save(AnswerTemplates.Create(assessment, name), dialog.FileName);
+                status.Text = "Шаблон оценок сохранён: " + dialog.FileName + ". Организация и материалы в него не входят.";
+            }
+            catch (Exception ex) { ShowError("Не удалось сохранить шаблон", ex); }
+        }
+        void LoadAnswerTemplate()
+        {
+            OpenFileDialog dialog = new OpenFileDialog { Title = "Заполнить оценку из шаблона", Filter = "Шаблон оценок (*.answers.json)|*.answers.json|JSON (*.json)|*.json", InitialDirectory = TemplateFolder() };
+            if (dialog.ShowDialog(this) != true) return;
+            try
+            {
+                AnswerTemplate t = AnswerTemplates.Load(dialog.FileName);
+                if (Calc.Summary(assessment).Answered > 0 || assessment.Directions.Any(d => !d.Included))
+                {
+                    MessageBoxResult choice = MessageBox.Show(this, "Текущие ответы, область оценки, категория и цели будут заменены значениями из шаблона «" + (t.Name.Length > 0 ? t.Name : Path.GetFileName(dialog.FileName)) + "». Реквизиты, паспорт и подтверждающие материалы сохранятся. Продолжить?", "Заполнение из шаблона", MessageBoxButton.OKCancel, MessageBoxImage.Question);
+                    if (choice != MessageBoxResult.OK) return;
+                }
+                AnswerTemplates.Apply(assessment, t); copiedAnswers = null; Changed(); ShowPage();
+                Summary s = Calc.Summary(assessment);
+                status.Text = "Заполнено из шаблона «" + (t.Name.Length > 0 ? t.Name : Path.GetFileName(dialog.FileName)) + "»: " + s.Answered + " из " + s.Total + " ответов. Исправьте отличия этой организации.";
+            }
+            catch (Exception ex) { ShowError("Не удалось загрузить шаблон", ex); }
+        }
+        static string TemplateFolder()
+        {
+            string folder = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Данные", "Шаблоны оценок");
+            try { Directory.CreateDirectory(folder); } catch { }
+            return folder;
+        }
         void ForgetCopiedAnswer(int directionId, int criterion)
         {
             if (copiedAnswers == null) return; copiedAnswers.RemoveAll(x => x.DirectionId == directionId && x.Criterion == criterion);
@@ -134,19 +215,31 @@ namespace MaturityApp
     }
     public class QuickAnswerCell : Border
     {
-        readonly DirectionAssessment model; readonly int criterion; readonly Action changed; readonly Action<string> hint; readonly List<Button> buttons = new List<Button>();
-        public QuickAnswerCell(DirectionAssessment model, int criterion, Action changed, Action<string> hint)
+        static readonly Brush DifferentBackground = Theme.B("#FFF1D9");
+        readonly int criterion; readonly Func<double?> current, reference; readonly Func<bool> enabled; readonly Action<double?> pick; readonly Action<string> hint; readonly bool common;
+        readonly List<Button> buttons = new List<Button>();
+        // reference: the common answer; a differing grade is highlighted so exceptions stay visible.
+        public QuickAnswerCell(DirectionAssessment model, int criterion, Action changed, Action<string> hint, Func<double?> reference = null)
+            : this(criterion, () => model.Answers[criterion], () => model.Included, value => { model.Answers[criterion] = value; changed(); }, hint, reference, false) { }
+        // The common row sets a value for all following directions; it never clears answers.
+        public static QuickAnswerCell Common(int criterion, Func<double?> current, Action<double> pick, Action<string> hint)
         {
-            this.model = model; this.criterion = criterion; this.changed = changed; this.hint = hint; Focusable = true; Margin = new Thickness(2, 3, 2, 3); BorderThickness = new Thickness(1); CornerRadius = new CornerRadius(5);
+            return new QuickAnswerCell(criterion, current, () => true, value => { if (value.HasValue) pick(value.Value); }, hint, null, true);
+        }
+        QuickAnswerCell(int criterion, Func<double?> current, Func<bool> enabled, Action<double?> pick, Action<string> hint, Func<double?> reference, bool common)
+        {
+            this.criterion = criterion; this.current = current; this.enabled = enabled; this.pick = pick; this.hint = hint; this.reference = reference; this.common = common;
+            Focusable = true; Margin = new Thickness(2, 3, 2, 3); BorderThickness = new Thickness(1); CornerRadius = new CornerRadius(5);
             UniformGrid values = new UniformGrid { Columns = Data.Criteria[criterion].Options.Length, VerticalAlignment = VerticalAlignment.Center }; Child = values;
             foreach (AnswerOption option in Data.Criteria[criterion].Options)
             {
                 AnswerOption selectedOption = option;
                 Button b = new Button { Content = Calc.F(option.Value), Padding = new Thickness(0, 8, 0, 8), Margin = new Thickness(1, 0, 1, 0), FontSize = 12, Focusable = false, BorderThickness = new Thickness(1), BorderBrush = Theme.Line };
-                string description = Data.Criteria[criterion].Name + " · " + Calc.F(option.Value) + " — " + QuickInput.ShortLabel(criterion, option.Value) + "\n" + option.Text;
-                b.ToolTip = new TextBlock { Text = description + "\n\nПовторное нажатие снимает ответ.", MaxWidth = 450, TextWrapping = TextWrapping.Wrap }; ToolTipService.SetInitialShowDelay(b, 180);
+                string description = (common ? "Общий ответ · " : "") + Data.Criteria[criterion].Name + " · " + Calc.F(option.Value) + " — " + QuickInput.ShortLabel(criterion, option.Value) + "\n" + option.Text;
+                string action = common ? "Значение получат все включённые направления, кроме тех, где ответ отличается от общего." : "Повторное нажатие снимает ответ.";
+                b.ToolTip = new TextBlock { Text = description + "\n\n" + action, MaxWidth = 450, TextWrapping = TextWrapping.Wrap }; ToolTipService.SetInitialShowDelay(b, 180);
                 b.MouseEnter += (s, e) => hint(description);
-                b.Click += (s, e) => { if (!model.Included) return; model.Answers[criterion] = model.Answers[criterion].HasValue && model.Answers[criterion].Value == selectedOption.Value ? (double?)null : selectedOption.Value; Focus(); changed(); }; buttons.Add(b); values.Children.Add(b);
+                b.Click += (s, e) => { if (!enabled()) return; double? now = current(); pick(!common && now.HasValue && now.Value == selectedOption.Value ? (double?)null : selectedOption.Value); Focus(); }; buttons.Add(b); values.Children.Add(b);
             }
             GotKeyboardFocus += (s, e) => { BorderBrush = Theme.B("#7AA7EE"); ShowCurrentHint(); };
             LostKeyboardFocus += (s, e) => BorderBrush = Brushes.Transparent;
@@ -154,25 +247,29 @@ namespace MaturityApp
         }
         void ShowCurrentHint()
         {
-            AnswerOption option = Data.Criteria[criterion].Options.FirstOrDefault(x => model.Answers[criterion].HasValue && x.Value == model.Answers[criterion].Value);
-            hint(Data.Criteria[criterion].Name + (option == null ? " — не оценено. Выберите 0, 5 или 1" + (criterion == 5 ? "; 3 — эпизодически" : "") + "." : " · " + Calc.F(option.Value) + " — " + option.Text));
+            double? now = current();
+            AnswerOption option = Data.Criteria[criterion].Options.FirstOrDefault(x => now.HasValue && x.Value == now.Value);
+            hint((common ? "Общий ответ · " : "") + Data.Criteria[criterion].Name + (option == null ? " — не оценено. Выберите 0, 5 или 1" + (criterion == 5 ? "; 3 — эпизодически" : "") + "." : " · " + Calc.F(option.Value) + " — " + option.Text));
         }
         void OnAnswerKey(object sender, KeyEventArgs e)
         {
-            if (!model.Included || (Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Alt | ModifierKeys.Windows)) != 0) return; double? value = null; bool recognized = true;
+            if (!enabled() || (Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Alt | ModifierKeys.Windows)) != 0) return; double? value = null; bool recognized = true;
             if (e.Key == Key.D0 || e.Key == Key.NumPad0) value = 0;
             else if (e.Key == Key.D1 || e.Key == Key.NumPad1) value = 1;
             else if (e.Key == Key.D5 || e.Key == Key.NumPad5) value = .5;
             else if ((e.Key == Key.D3 || e.Key == Key.NumPad3) && criterion == 5) value = .3;
-            else if (e.Key != Key.Delete && e.Key != Key.Back) recognized = false;
-            if (!recognized) return; model.Answers[criterion] = value; e.Handled = true; changed(); ShowCurrentHint();
+            else if (common || e.Key != Key.Delete && e.Key != Key.Back) recognized = false;
+            if (!recognized) return; pick(value); e.Handled = true; ShowCurrentHint();
         }
         public void Refresh()
         {
-            IsEnabled = model.Included; Opacity = model.Included ? 1 : .3;
+            bool on = enabled(); double? now = current(), shared = reference == null ? null : reference();
+            IsEnabled = on; Opacity = on ? 1 : .3;
+            Background = on && now.HasValue && shared.HasValue && Math.Abs(now.Value - shared.Value) > 1e-10 ? DifferentBackground : Brushes.Transparent;
+            ToolTip = Background == DifferentBackground ? "Отличается от общего ответа (" + Calc.F(shared.Value) + ")" : null;
             for (int i = 0; i < buttons.Count; i++)
             {
-                bool selected = model.Answers[criterion].HasValue && model.Answers[criterion].Value == Data.Criteria[criterion].Options[i].Value;
+                bool selected = now.HasValue && now.Value == Data.Criteria[criterion].Options[i].Value;
                 buttons[i].Background = selected ? Theme.Blue : Brushes.White; buttons[i].Foreground = selected ? Brushes.White : Theme.Muted;
                 buttons[i].BorderBrush = selected ? Theme.Blue : Theme.Line;
             }

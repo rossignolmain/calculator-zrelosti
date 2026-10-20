@@ -244,7 +244,7 @@ namespace MaturityApp
         }
         void ShowPage()
         {
-            building = true; center.Children.Clear(); answerRadios.Clear(); answerBorders.Clear(); quickRows.Clear(); quickScore = quickNotice = quickHint = null; quickCopySource = null; massExpander = null; massCriterionBox = null; massScopeText = null; massValueButtons.Clear();
+            building = true; center.Children.Clear(); answerRadios.Clear(); answerBorders.Clear(); quickRows.Clear(); commonCells.Clear(); quickScore = quickNotice = quickHint = null; quickCopySource = null; massExpander = null; massCriterionBox = null; massScopeText = null; massValueButtons.Clear();
             passportDescription = passportTopology = passportUnknown = null;
             passportChannelChoice = passportInternetChoice = null;
             passportReference = null; passportReferenceLink = null;
@@ -358,6 +358,7 @@ namespace MaturityApp
             if (undoButton != null) undoButton.Visibility = copiedAnswers != null && copiedAnswers.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
             if (quickScore != null) quickScore.Text = summary.Count == 0 ? "Узи —" : "Узи " + Calc.F(summary.Average, "0.00");
             if (quickNotice != null) quickNotice.Text = summary.Count == 0 ? "Включите направления галочками в таблице" : summary.Complete ? "Анкета заполнена · целей достигнуто: " + summary.Met + "/" + summary.Count : "Предварительно · осталось ответов: " + (summary.Total - summary.Answered);
+            foreach (QuickAnswerCell cell in commonCells) cell.Refresh();
             foreach (QuickRowView row in quickRows)
             {
                 DirectionResult result = Calc.Direction(row.Model);
