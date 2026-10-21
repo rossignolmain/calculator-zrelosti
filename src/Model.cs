@@ -28,6 +28,15 @@ namespace MaturityApp
         public int Category = 1;
         public SystemPassport Passport = null;
         public DirectionAssessment[] Directions;
+        // Report data required by section VI of the methodology (see ReportData.cs).
+        public string AssessmentKind = "internal", ExternalLicense = "";
+        public string AssessorOrganization = "", AssessorContact = "";
+        public ReportPerson[] Participants = new ReportPerson[0];
+        public string[] Requirements = new string[0], SourceData = new string[0], Methods = new string[0];
+        public string[] Instruments = { "calculator" };
+        public string ToolsNote = "", SourceDataNote = "";
+        public PreviousResult Previous = null;
+        public string PlanResponsible = "", PlanDeadline = "";
         public static Assessment Create()
         {
             Assessment a = new Assessment();
@@ -135,6 +144,7 @@ namespace MaturityApp
             DateTime date;
             if (!DateTime.TryParseExact(a.Date, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out date)) throw new InvalidDataException("Некорректная дата оценки.");
             SystemPassports.Validate(a.Passport);
+            ReportFacts.Normalize(a);
             int minimum = Math.Max(1, a.Category);
             HashSet<int> ids = new HashSet<int>();
             foreach (DirectionAssessment d in a.Directions)

@@ -48,6 +48,11 @@ namespace MaturityApp
                     window.RenderPreview("results", Path.Combine(folder, "Результаты.png"));
                     window.RenderPreview("analysis", Path.Combine(folder, "Аналитика.png"));
                     window.RenderPreview("settings", Path.Combine(folder, "Параметры.png"));
+                    window.RenderPreview("settings", Path.Combine(folder, "Данные для отчёта полностью.png"), 1450, 3300);
+                    string demoLibrary = Path.Combine(folder, "Демо-библиотека"); Directory.CreateDirectory(demoLibrary);
+                    string demoTemplate = TemplateLibrary.SaveNew(AnswerTemplates.Create(demo, "Школа · АИСТ ГБД · ГИС К3"), demoLibrary);
+                    LibraryWindow library = new LibraryWindow(demo, null); library.UseFolderForSession(demoLibrary); library.Select(demoTemplate);
+                    library.RenderPreview(Path.Combine(folder, "Библиотека шаблонов.png"));
                     ExportReviewWindow review = new ExportReviewWindow(demo, true);
                     review.RenderPreview(Path.Combine(folder, "Комплект.png"));
                     app.Shutdown(); return 0;
@@ -207,6 +212,7 @@ namespace MaturityApp
             MenuItem create = new MenuItem { Header = "Новая оценка" }; create.Click += (s, e) => NewProject(); menu.Items.Add(create);
             MenuItem save = new MenuItem { Header = "Сохранить файл проекта (.uzi.json)" }; save.Click += (s, e) => SaveProject(false); menu.Items.Add(save);
             MenuItem saveAs = new MenuItem { Header = "Сохранить проект как…" }; saveAs.Click += (s, e) => SaveProject(true); menu.Items.Add(saveAs);
+            MenuItem libraryItem = new MenuItem { Header = "Библиотека шаблонов…" }; libraryItem.Click += (s, e) => OpenLibrary(); menu.Items.Add(libraryItem);
             menu.Items.Add(new Separator());
             MenuItem word = new MenuItem { Header = "Только отчёт Word (.docx)" }; word.Click += (s, e) => Export(true); menu.Items.Add(word);
             MenuItem excel = new MenuItem { Header = "Только таблица Excel (.xlsx)" }; excel.Click += (s, e) => Export(false); menu.Items.Add(excel);
@@ -245,7 +251,7 @@ namespace MaturityApp
         void ShowPage()
         {
             building = true; center.Children.Clear(); answerRadios.Clear(); answerBorders.Clear(); quickRows.Clear(); commonCells.Clear(); quickScore = quickNotice = quickHint = null; quickCopySource = null; massExpander = null; massCriterionBox = null; massScopeText = null; massValueButtons.Clear();
-            passportDescription = passportTopology = passportUnknown = null;
+            passportDescription = passportTopology = passportUnknown = null; reportMissing = previousText = null; participantRows = null;
             passportChannelChoice = passportInternetChoice = null;
             passportReference = null; passportReferenceLink = null;
             directionLevel = directionP = directionProgress = remainingText = overallValue = overallLabel = answeredValue = countValue = null; recommendationPanel = null;
@@ -495,6 +501,7 @@ namespace MaturityApp
             profiles.Children.Add(Theme.Button("Загрузить реквизиты", LoadProfile)); profiles.Children.Add(Theme.Button("Сохранить реквизиты", SaveProfile)); metadata.Children.Add(profiles);
             TextBlock profileHelp = Theme.Text("Реквизиты и подписанты хранятся отдельно от оценки. Их загрузка не изменяет систему, дату, ответы и цели.", 11, Theme.Muted); profileHelp.Margin = new Thickness(0, 10, 0, 0); metadata.Children.Add(profileHelp);
             body.Children.Add(Theme.Card(metadata));
+            BuildReportData(body);
             StackPanel about = new StackPanel(); about.Children.Add(Theme.Text("О расчёте", 18, null, true));
             TextBlock rules = Theme.Text("21 базовое направление × 8 критериев. D = вес × оценка; P = сумма D. Текущий уровень — максимальный уровень с выполненным порогом P и обязательными минимумами таблицы 3. Итог Узи округляется до двух знаков. Интервал 0,2 ≤ P < 0,225 трактуется как уровень 0, как в исходном калькуляторе.\n\nНезаполненные ответы временно учитываются как 0; до полного заполнения итог помечается как предварительный. Если все направления исключены, показатель не рассчитывается. Данные не передаются в интернет.\n\nИсточник алгоритма и формулировок: 117fstec.credos.ru/maturity. Методика от " + Data.MethodDate + ". Это самостоятельное приложение; результат зависит от введённых данных.", 12, Theme.Muted); rules.Margin = new Thickness(0, 12, 0, 0); about.Children.Add(rules);
             Expander aboutCard = new Expander { Header = "Методика и справка", Content = about, Margin = new Thickness(0, 18, 0, 24) }; body.Children.Add(aboutCard);

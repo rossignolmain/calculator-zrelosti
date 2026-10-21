@@ -57,6 +57,12 @@ namespace MaturityApp
                 Test("common row fills 168 cells in 8 clicks and keeps individual differences", CommonRow);
                 Test("passport exclusion is an explicit command and keeps answers", PassportExclusion);
                 Test("answer template carries grades, scope and goals but no requisites", AnswerTemplateRoundTrip);
+                Test("report follows item 35 а-н and flags missing data", ReportStructure);
+                Test("dynamics follow item 33 of the methodology", DynamicsRules);
+                Test("template library saves, applies by parts, renames, replaces and trashes", Library);
+                Test("old projects open and report data is validated", ReportDataCompatibility);
+                Test("organization profile carries contacts and participants", ProfileWithPeople);
+                Test("report data page edits the model", ReportPage);
             }
             finally
             {
@@ -403,6 +409,7 @@ namespace MaturityApp
             Click(exclude); Layout(window);
             int[] off = a.Directions.Where(d => !d.Included).Select(d => d.Id).ToArray();
             Assert(String.Join(",", off) == "8,9,10,13,19", "Passport exclusion changed the wrong scope.");
+            Assert(a.Directions[7].Evidence.Contains("п. 13") && a.Directions[9].Evidence.Contains("Wi-Fi"), "Passport exclusion did not record the basis of exclusion.");
             Assert(a.Directions[7].Answers[0] == 1, "Exclusion deleted an answer.");
             Assert(find() == null, "The exclusion is still offered after it was applied.");
         }
@@ -412,7 +419,7 @@ namespace MaturityApp
             a.Directions[0].Answers = new double?[] { 1, .5, 0, 1, .5, .3, 0, 1 }; a.Directions[12].Included = false; a.Directions[2].Target = 4; a.Directions[0].Evidence = "Документ А";
             a.Passport = SystemPassports.CreateSingleArm();
             string path = Path.Combine(outputFolder, "ui-template.answers.json");
-            AnswerTemplates.Save(AnswerTemplates.Create(a, "Школы"), path);
+            AnswerTemplates.Save(AnswerTemplates.Create(a, "Школы", TemplateParts.Grades), path);
             string json = File.ReadAllText(path, Encoding.UTF8);
             Assert(!json.Contains("Организация А") && !json.Contains("Документ А") && !json.Contains("Workstations"), "The template leaked requisites, evidence or passport.");
             Assessment b = Assessment.Create(); b.Organization = "Организация Б"; b.Directions[0].Evidence = "Документ Б";
@@ -427,6 +434,134 @@ namespace MaturityApp
             try { AnswerTemplates.Parse(Store.Serialize(a)); } catch (InvalidDataException) { rejected = true; }
             Assert(rejected, "A project file was accepted as an answer template.");
             report.generatedFiles.Add(path);
+        }
+        static Assessment FullReportAssessment()
+        {
+            Assessment a = Assessment.Create(); a.Organization = "МБОУ «Школа № 1»"; a.SystemName = "ГИС «Электронная школа»"; a.Assessor = "Иванов И. И."; a.AssessorPosition = "Специалист по ЗИ";
+            a.AssessorOrganization = "МБОУ «Школа № 1»"; a.AssessorContact = "+7 000 000-00-00"; a.ApproverName = "Петров П. П."; a.ApproverPosition = "Директор";
+            a.Requirements = new[] { "fstec117", "fstec21" }; a.SourceData = new[] { "a", "g", "k" }; a.Methods = new[] { "documents", "interview" };
+            a.Participants = new[] { new ReportPerson { Role = "source", Name = "Сидорова С. С.", Position = "Заместитель директора", Organization = "МБОУ «Школа № 1»", Contact = "s@school.example" } };
+            a.PlanResponsible = "Ответственный за ЗИ"; a.PlanDeadline = "до 31.12.2027";
+            foreach (DirectionAssessment d in a.Directions) d.Answers = new double?[] { 1, 1, .5, .5, 1, .5, 0, .5 };
+            a.Directions[18].Included = false; a.Directions[18].Evidence = "ИИ не применяется.";
+            a.Directions[0].Target = 4; // one unmet goal, so the plan (п. 35 м, н) has rows
+            return a;
+        }
+        static string WordXml(string path)
+        {
+            using (ZipArchive zip = ZipFile.OpenRead(path))
+            using (StreamReader r = new StreamReader(zip.GetEntry("word/document.xml").Open(), Encoding.UTF8)) return r.ReadToEnd();
+        }
+        static void ReportStructure()
+        {
+            Assessment a = FullReportAssessment();
+            Assert(ReportFacts.Missing(a).Length == 0, "A fully described assessment still reports missing data: " + String.Join("; ", ReportFacts.Missing(a)));
+            string word = Path.Combine(outputFolder, "report-full.docx"); Reports.ExportWord(a, word); string xml = WordXml(word);
+            foreach (string letter in new[] { "а", "б", "в", "г", "д", "е", "ж", "з", "и", "к", "л", "м", "н" })
+                Assert(xml.Contains("(п. 35 " + letter + ")"), "Word report misses item 35 " + letter + ".");
+            Assert(xml.Contains("Подписи (п. 36)") && xml.Contains("УТВЕРЖДАЮ"), "Signatures or approval are missing.");
+            Assert(!xml.Contains("Отчёт неполон"), "A complete report is flagged as incomplete.");
+            Assert(xml.Contains("Сидорова С. С.") && xml.Contains("s@school.example") && xml.Contains("+7 000 000-00-00"), "People or contacts are missing from the report.");
+            Assert(xml.Contains("приказ ФСТЭК России от 11.04.2025 № 117") && xml.Contains("ИИ не применяется."), "Requirements or the exclusion basis are missing.");
+            Assert(xml.Contains("Узи = ΣУзитi / N = (") && xml.Contains(") / 20 = "), "The Uzi calculation is not shown with N = 20.");
+            Assert(xml.Contains("до 31.12.2027") && xml.Contains("Ответственный за ЗИ"), "Plan owner or deadline is missing.");
+            Assert(xml.Contains("Предыдущая оценка уровня зрелости не проводилась"), "Absent previous assessment is not stated.");
+            string excel = Path.Combine(outputFolder, "report-full.xlsx"); Reports.ExportExcel(a, excel);
+            using (ZipArchive zip = ZipFile.OpenRead(excel))
+            using (StreamReader r = new StreamReader(zip.GetEntry("xl/workbook.xml").Open(), Encoding.UTF8))
+            { string book = r.ReadToEnd(); Assert(book.Contains("Сведения по п. 35") && book.Contains("Dij и Pзн"), "Excel misses the item 35 or Dij sheets."); }
+            Assessment empty = Assessment.Create(); string emptyWord = Path.Combine(outputFolder, "report-empty.docx"); Reports.ExportWord(empty, emptyWord);
+            Assert(WordXml(emptyWord).Contains("Отчёт неполон"), "An empty report is not flagged as incomplete.");
+            report.generatedFiles.Add(word); report.generatedFiles.Add(excel);
+        }
+        static void DynamicsRules()
+        {
+            Assessment old = FullReportAssessment(); Assessment now = FullReportAssessment();
+            now.Previous = ReportFacts.FromAssessment(old, "test");
+            Assert(ReportFacts.Dynamics(now).Kind == "zero", "Identical assessments must give zero dynamics.");
+            now.Directions[0].Answers[6] = 1; now.Directions[0].Answers[5] = 1; now.Directions[0].Answers[7] = 1; now.Directions[0].Answers[2] = 1; now.Directions[0].Answers[3] = 1;
+            Assert(Calc.Direction(now.Directions[0]).Level > Calc.Direction(old.Directions[0]).Level, "Test setup did not raise a level.");
+            Assert(ReportFacts.Dynamics(now).Kind == "positive", "Growth of Uzi must give positive dynamics (п. 33 а).");
+            now.Directions[1].Answers[6] = null; now.Directions[1].Answers[2] = 0;
+            Assert(ReportFacts.Dynamics(now).Kind == "negative" && ReportFacts.Dynamics(now).CriterionDecreases.Count > 0, "Any decrease must give negative dynamics (п. 33 г).");
+            Assessment manual = FullReportAssessment(); manual.Previous = new PreviousResult { Date = "2025-10-01", Uzi = 0.5, Source = "вручную" };
+            Assert(ReportFacts.Dynamics(manual).Kind == "positive", "A manually entered lower Uzi must give positive dynamics.");
+            string json = Store.Serialize(now); Assessment back = Store.Parse(json);
+            Assert(back.Previous != null && back.Previous.Directions.Length == 21 && back.Previous.Source == "test", "Previous result does not survive saving.");
+        }
+        static void Library()
+        {
+            string folder = Path.Combine(outputFolder, "library"); if (Directory.Exists(folder)) Directory.Delete(folder, true); Directory.CreateDirectory(folder);
+            Assessment source = FullReportAssessment(); source.Passport = SystemPassports.CreateSingleArm(); source.Passport.ExternalSystem = "ППО АИСТ ГБД"; source.Category = 2; foreach (DirectionAssessment d in source.Directions) d.Target = 2;
+            string first = TemplateLibrary.SaveNew(AnswerTemplates.Create(source, "Школа · АИСТ"), folder);
+            string second = TemplateLibrary.SaveNew(AnswerTemplates.Create(source, "Школа · АИСТ"), folder);
+            Assert(first != second && File.Exists(first) && File.Exists(second), "Two templates with one name overwrote each other.");
+            string json = File.ReadAllText(first, Encoding.UTF8);
+            Assert(!json.Contains("Сидорова") && !json.Contains("МБОУ") && !json.Contains("ИИ не применяется"), "A template leaked people, organization or evidence.");
+            SystemPassports.SaveTemplate(SystemPassports.CreateSingleArm(), Path.Combine(folder, "Старая основа.arm.json"));
+            File.WriteAllText(Path.Combine(folder, "Битый.answers.json"), "{oops", Encoding.UTF8);
+            List<LibraryEntry> entries = TemplateLibrary.List(folder);
+            Assert(entries.Count == 4 && entries.Count(e => e.IsValid) == 3 && entries.Any(e => e.Passport != null), "Library listing is wrong (templates, legacy basis, broken file).");
+
+            Assessment target = Assessment.Create(); target.Organization = "Другая школа"; target.Directions[0].Evidence = "Свой документ";
+            LibraryWindow window = new LibraryWindow(target, null); window.UseFolderForSession(folder);
+            window.Select(first);
+            Assert(window.ApplySelected(TemplateParts.Grades), "Applying grades failed.");
+            Assert(target.Category == 2 && target.Directions[0].Answers[0] == 1 && !target.Directions[18].Included && target.Passport == null && target.Requirements.Length == 0, "Grades-only apply touched other parts or missed grades.");
+            Assert(target.Organization == "Другая школа" && target.Directions[0].Evidence == "Свой документ" && target.Participants.Length == 0, "Template changed organization, evidence or people.");
+            window.Select(first); Assert(window.ApplySelected(TemplateParts.All), "Applying all parts failed.");
+            Assert(target.Passport != null && target.Passport.ExternalSystem == "ППО АИСТ ГБД" && target.Requirements.Contains("fstec117") && target.Methods.Contains("interview"), "Full apply missed passport or practice.");
+
+            target.Directions[2].Answers[0] = 0; window.Select(first); Assert(window.OverwriteSelected(), "Overwrite failed.");
+            Assert(AnswerTemplates.Load(first).Directions[2].Answers[0] == 0 && AnswerTemplates.Load(first).Name == "Школа · АИСТ", "Overwrite lost the change or the name.");
+            window.Select(second); Assert(window.RenameSelected("Поликлиника"), "Rename failed.");
+            Assert(TemplateLibrary.List(folder).Any(e => e.Name == "Поликлиника" && e.Path.EndsWith("Поликлиника.answers.json")), "Rename did not change name and file.");
+            window.Select(first); Assert(window.RemoveSelected(), "Remove failed.");
+            Assert(!File.Exists(first) && Directory.GetFiles(Path.Combine(folder, TemplateLibrary.TrashFolder)).Length == 1, "Removed template was not moved to the trash folder.");
+            string fresh = window.SaveCurrentAsNew("Новый тип"); Assert(fresh != null && File.Exists(fresh), "Saving the current assessment as a new template failed.");
+            Assert(!window.IsVisible, "The library window became visible in a headless test.");
+        }
+        static void ReportDataCompatibility()
+        {
+            Assessment legacy = Assessment.Create();
+            string json = Store.Serialize(legacy);
+            foreach (string field in new[] { "AssessmentKind", "ExternalLicense", "AssessorOrganization", "AssessorContact", "Participants", "Requirements", "SourceData", "Methods", "Instruments", "ToolsNote", "SourceDataNote", "Previous", "PlanResponsible", "PlanDeadline" })
+            {
+                int at = json.IndexOf(",\"" + field + "\":", StringComparison.Ordinal); Assert(at > 0, "Field not serialized: " + field);
+                int end = json.IndexOf(",\"", at + 2, StringComparison.Ordinal); if (end < 0) end = json.LastIndexOf('}');
+                json = json.Remove(at, end - at);
+            }
+            Assessment opened = Store.Parse(json);
+            Assert(opened.Participants.Length == 0 && opened.Requirements.Length == 0 && opened.AssessmentKind == "internal" && opened.Previous == null, "A 1.5 project did not open with empty report data.");
+            bool rejected = false;
+            try { Assessment bad = Assessment.Create(); bad.Participants = new[] { new ReportPerson { Role = "boss" } }; Store.Parse(Store.Serialize(bad)); } catch (InvalidDataException) { rejected = true; }
+            Assert(rejected, "An unknown participant role was accepted.");
+            rejected = false;
+            try { Assessment bad = Assessment.Create(); bad.Methods = new[] { "magic" }; Store.Parse(Store.Serialize(bad)); } catch (InvalidDataException) { rejected = true; }
+            Assert(rejected, "An unknown method was accepted.");
+        }
+        static void ProfileWithPeople()
+        {
+            Assessment a = FullReportAssessment(); string path = Path.Combine(outputFolder, "profile.org.json");
+            ProjectTools.SaveProfile(a, path);
+            Assessment b = Assessment.Create(); b.Directions[0].Answers[0] = .5;
+            ProjectTools.ApplyProfile(b, ProjectTools.LoadProfile(path));
+            Assert(b.AssessorContact == a.AssessorContact && b.Participants.Length == 1 && b.Participants[0].Name == "Сидорова С. С.", "Profile lost contacts or participants.");
+            Assert(b.Directions[0].Answers[0] == .5 && b.Requirements.Length == 0, "Profile changed grades or practice.");
+        }
+        static void ReportPage()
+        {
+            Assessment a = Assessment.Create(); a.Organization = "Оператор"; MainWindow window = Create(a); Page(window, "settings");
+            CheckBox requirement = Tree((DependencyObject)window.Content).OfType<CheckBox>().Single(c => (c.Tag as string) == "report:fstec239");
+            requirement.IsChecked = true; Assert(a.Requirements.SequenceEqual(new[] { "fstec239" }), "Ticking a requirement did not update the model.");
+            CheckBox method = Tree((DependencyObject)window.Content).OfType<CheckBox>().Single(c => (c.Tag as string) == "report:interview");
+            method.IsChecked = true; method.IsChecked = false; Assert(a.Methods.Length == 0, "Unticking a method did not update the model.");
+            Click(Tree((DependencyObject)window.Content).OfType<Button>().Single(b => (b.Content as string ?? "") == "+ Предоставлял исходные данные")); Layout(window);
+            Assert(a.Participants.Length == 1 && a.Participants[0].Role == "source" && a.Participants[0].Organization == "Оператор", "Adding a participant did not prefill the operator.");
+            Click(Tree((DependencyObject)window.Content).OfType<Button>().Single(b => (b.Content as string ?? "") == "Организация = оператор")); Layout(window);
+            Assert(a.AssessorOrganization == "Оператор", "Assessor organization shortcut failed.");
+            Call(window, "ApplyPrevious", FullReportAssessment(), "old.zip"); Layout(window);
+            Assert(a.Previous != null && a.SourceData.Contains("zh") && a.Methods.Contains("previous"), "Loading a previous assessment did not record it as analysed source data.");
         }
     }
 }

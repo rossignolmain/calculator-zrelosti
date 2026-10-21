@@ -40,8 +40,7 @@ namespace MaturityApp
             categoryField.Children.Add(category); Grid.SetColumn(categoryField, 2); info.Children.Add(categoryField);
             top.Children.Add(Theme.Card(info, new Thickness(14, 11, 14, 12)));
             WrapPanel tools = new WrapPanel { Margin = new Thickness(0, 10, 0, 0) };
-            Button loadTemplate = Theme.Button("Заполнить из шаблона…", LoadAnswerTemplate); loadTemplate.ToolTip = "Ответы, область оценки, категория и цели из файла .answers.json. Реквизиты, паспорт и материалы не меняются."; tools.Children.Add(loadTemplate);
-            Button saveTemplate = Theme.Button("Сохранить ответы как шаблон…", SaveAnswerTemplate); saveTemplate.ToolTip = "Сохраняет только оценки, область, категорию и цели — без организации и подтверждающих материалов."; tools.Children.Add(saveTemplate);
+            Button library = Theme.Button("Библиотека шаблонов…", OpenLibrary); library.ToolTip = "Подставить шаблон в эту оценку или сохранить её как новый шаблон. Шаблонов может быть сколько угодно; папку можно сделать общей."; tools.Children.Add(library);
             int[] inapplicable = QuickInput.PassportInapplicable(assessment.Passport).Where(id => assessment.Directions[id - 1].Included).ToArray();
             if (inapplicable.Length > 0)
             {
@@ -159,45 +158,23 @@ namespace MaturityApp
         }
         void ExcludeByPassport(int[] ids)
         {
-            foreach (int id in ids) assessment.Directions[id - 1].Included = false;
+            foreach (int id in ids)
+            {
+                DirectionAssessment d = assessment.Directions[id - 1]; d.Included = false;
+                if (String.IsNullOrWhiteSpace(d.Evidence)) d.Evidence = PassportExclusionReason(id);
+            }
             Changed(); ShowPage();
-            status.Text = "Исключены по паспорту: " + String.Join(", ", ids) + ". Ответы сохранены; вернуть можно галочкой в таблице.";
+            status.Text = "Исключены по паспорту: " + String.Join(", ", ids) + ". Основание по п. 13 Методики записано в материалы направления; ответы сохранены.";
         }
-        void SaveAnswerTemplate()
+        void OpenLibrary()
         {
-            SaveFileDialog dialog = new SaveFileDialog { Title = "Сохранить ответы как шаблон", Filter = "Шаблон оценок (*.answers.json)|*.answers.json", FileName = "Типовые оценки.answers.json", AddExtension = true, DefaultExt = ".answers.json", InitialDirectory = TemplateFolder() };
-            if (dialog.ShowDialog(this) != true) return;
-            try
-            {
-                string name = Path.GetFileName(dialog.FileName); name = name.EndsWith(".answers.json", StringComparison.OrdinalIgnoreCase) ? name.Substring(0, name.Length - 13) : Path.GetFileNameWithoutExtension(name);
-                AnswerTemplates.Save(AnswerTemplates.Create(assessment, name), dialog.FileName);
-                status.Text = "Шаблон оценок сохранён: " + dialog.FileName + ". Организация и материалы в него не входят.";
-            }
-            catch (Exception ex) { ShowError("Не удалось сохранить шаблон", ex); }
+            LibraryWindow window = new LibraryWindow(assessment, () => { copiedAnswers = null; Changed(); ShowPage(); }) { Owner = this };
+            window.ShowDialog();
         }
-        void LoadAnswerTemplate()
+        static string PassportExclusionReason(int id)
         {
-            OpenFileDialog dialog = new OpenFileDialog { Title = "Заполнить оценку из шаблона", Filter = "Шаблон оценок (*.answers.json)|*.answers.json|JSON (*.json)|*.json", InitialDirectory = TemplateFolder() };
-            if (dialog.ShowDialog(this) != true) return;
-            try
-            {
-                AnswerTemplate t = AnswerTemplates.Load(dialog.FileName);
-                if (Calc.Summary(assessment).Answered > 0 || assessment.Directions.Any(d => !d.Included))
-                {
-                    MessageBoxResult choice = MessageBox.Show(this, "Текущие ответы, область оценки, категория и цели будут заменены значениями из шаблона «" + (t.Name.Length > 0 ? t.Name : Path.GetFileName(dialog.FileName)) + "». Реквизиты, паспорт и подтверждающие материалы сохранятся. Продолжить?", "Заполнение из шаблона", MessageBoxButton.OKCancel, MessageBoxImage.Question);
-                    if (choice != MessageBoxResult.OK) return;
-                }
-                AnswerTemplates.Apply(assessment, t); copiedAnswers = null; Changed(); ShowPage();
-                Summary s = Calc.Summary(assessment);
-                status.Text = "Заполнено из шаблона «" + (t.Name.Length > 0 ? t.Name : Path.GetFileName(dialog.FileName)) + "»: " + s.Answered + " из " + s.Total + " ответов. Исправьте отличия этой организации.";
-            }
-            catch (Exception ex) { ShowError("Не удалось загрузить шаблон", ex); }
-        }
-        static string TemplateFolder()
-        {
-            string folder = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Данные", "Шаблоны оценок");
-            try { Directory.CreateDirectory(folder); } catch { }
-            return folder;
+            string technology = id == 8 ? "мобильные устройства" : id == 9 ? "удалённый доступ (удалённое администрирование)" : id == 10 ? "беспроводной доступ (Wi-Fi)" : id == 13 ? "собственная разработка программного обеспечения" : "технологии искусственного интеллекта";
+            return "Исключено из области оценки по п. 13 Методики: в объекте не применяются " + technology + " (паспорт объекта).";
         }
         void ForgetCopiedAnswer(int directionId, int criterion)
         {

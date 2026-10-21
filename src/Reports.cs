@@ -6,6 +6,7 @@ using System.Drawing.Imaging;
 using System.Globalization;
 using System.IO;
 using System.IO.Compression;
+using System.Linq;
 using System.Security;
 using System.Text;
 
@@ -47,8 +48,8 @@ namespace MaturityApp
             if (a == null) throw new ArgumentNullException("a");
             Summary summary = Calc.Summary(a);
             AssessmentAnalysis analysis = Analysis.Build(a);
-            string[] names = { "Сводка", "Ответы", "Рекомендации", "Профиль критериев", "План улучшений", "Общие дефициты" };
-            string[] sheets = { SummarySheet(a, summary), AnswersSheet(a), RecommendationsSheet(a), CriterionProfileSheet(analysis), DeficitPlanSheet(analysis), GroupedActionsSheet(analysis) };
+            string[] names = { "Сводка", "Сведения по п. 35", "Dij и Pзн", "Ответы", "Рекомендации", "Профиль критериев", "План улучшений", "Общие дефициты" };
+            string[] sheets = { SummarySheet(a, summary), ReportInfoSheet(a, summary), DijSheet(a), AnswersSheet(a), RecommendationsSheet(a), CriterionProfileSheet(analysis), DeficitPlanSheet(analysis, a.PlanResponsible, a.PlanDeadline), GroupedActionsSheet(analysis) };
             if (a.Passport != null)
             {
                 Array.Resize(ref names, names.Length + 1);
@@ -130,88 +131,261 @@ namespace MaturityApp
         private static string WordDocument(Assessment a, Summary s, AssessmentAnalysis analysis)
         {
             StringBuilder b = new StringBuilder("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><w:document xmlns:w=\"" + NsWord + "\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:pic=\"http://schemas.openxmlformats.org/drawingml/2006/picture\"><w:body>");
-            b.Append(P("ОЦЕНКА ЗРЕЛОСТИ", "Title"));
-            b.Append(P("информационной безопасности", "Subtitle"));
+            // Structure follows section VI of the methodology: item 35 letters а-н, signatures per item 36.
+            if (!String.IsNullOrWhiteSpace(a.ApproverName) || !String.IsNullOrWhiteSpace(a.ApproverPosition))
+                b.Append(ApprovalBlock(a.ApproverPosition, a.ApproverName));
+            b.Append(P("ОТЧЁТ", "Title"));
+            b.Append(P("об оценке уровня зрелости деятельности в области защиты информации (обеспечения безопасности значимых объектов КИИ)", "Subtitle"));
             AppendOptionalWord(b, "Номер документа", a.DocumentNumber);
             b.Append(P(s.Complete ? "Оценка заполнена" : "ПРЕДВАРИТЕЛЬНЫЙ ОТЧЁТ · есть незаполненные ответы", s.Complete ? "Status" : "Warning"));
-            b.Append(P("Организация: " + Empty(a.Organization), null));
-            AppendOptionalWord(b, "Краткое наименование", a.OrganizationShort);
-            AppendOptionalWord(b, "Адрес организации", a.OrganizationAddress);
-            AppendOptionalWord(b, "Город", a.City);
-            b.Append(P("Система / объект оценки: " + Empty(a.SystemName), null));
-            b.Append(P("Оценку выполнил: " + Empty(a.Assessor), null));
-            AppendOptionalWord(b, "Должность составителя", a.AssessorPosition);
-            AppendOptionalWord(b, "Для утверждения", Person(a.ApproverPosition, a.ApproverName));
-            b.Append(P("Дата оценки: " + DateText(a.Date) + "    Категория: " + CategoryText(a.Category), null));
-            if (a.Passport != null)
+            b.Append(P("Оператор: " + Empty(a.Organization), null));
+            b.Append(P("Объект (область) оценки: " + Empty(a.SystemName), null));
+            b.Append(P("Дата проведения оценки: " + DateText(a.Date), null));
+            b.Append(P("Вид оценки: " + KindText(a), null));
+            b.Append(P("Уровень зрелости Узи = " + (s.Count == 0 ? "не рассчитан" : s.Average.ToString("0.00", Inv) + " — " + Calc.LevelName((int)Math.Floor(s.Average))), "Heading2"));
+            string[] missing = ReportFacts.Missing(a);
+            if (missing.Length > 0)
             {
-                b.Append(PageBreak());
-                AppendPassportWord(b, a);
-                b.Append(PageBreak());
+                b.Append(P("Отчёт неполон по разделу VI Методики:", "Warning"));
+                foreach (string m in missing) b.Append(P("• " + m, "Small"));
             }
-            b.Append(P("1. Сводные результаты", "Heading1"));
-            b.Append(P("Включено направлений: " + s.Count + ". Заполнено ответов: " + s.Answered + " из " + s.Total + ". Достигнута цель: " + s.Met + " из " + s.Count + ".", null));
-            b.Append(P("Средний текущий уровень: " + s.Average.ToString("0.00", Inv) + "; средний целевой: " + s.TargetAverage.ToString("0.00", Inv) + ". Общий уровень: " + ((int)Math.Floor(s.Average)) + " — " + Calc.LevelName((int)Math.Floor(s.Average)) + ".", null));
-            b.Append(P("Показатель P — сумма взвешенных оценок по восьми критериям. Текущий уровень и разрыв до цели рассчитаны для каждого направления отдельно. Исключённые направления не входят в сводные показатели.", "Small"));
-            b.Append(ChartParagraph());
-            b.Append(TableStart(new int[] { 450, 3750, 1100, 600, 800, 800, 700, 1100 }));
-            b.Append(TableRow(new string[] { "№", "Направление", "Статус", "P", "Уровень", "Цель", "Разрыв", "Ответы" }, true));
+            b.Append(PageBreak());
+
+            b.Append(P("1. Сведения об операторе (п. 35 а)", "Heading1"));
+            b.Append(TableStart(new int[] { 3200, 6300 }));
+            b.Append(TableRow(new string[] { "Сведение", "Значение" }, true));
+            b.Append(TableRow(new string[] { "Наименование оператора", Empty(a.Organization) }, false));
+            if (!String.IsNullOrWhiteSpace(a.OrganizationShort)) b.Append(TableRow(new string[] { "Краткое наименование", a.OrganizationShort }, false));
+            if (!String.IsNullOrWhiteSpace(a.OrganizationAddress)) b.Append(TableRow(new string[] { "Адрес", a.OrganizationAddress }, false));
+            if (!String.IsNullOrWhiteSpace(a.City)) b.Append(TableRow(new string[] { "Город", a.City }, false));
+            b.Append(TableRow(new string[] { "Объект (область) оценки", Empty(a.SystemName) }, false));
+            b.Append(TableRow(new string[] { "Класс / уровень / категория", CategoryLongText(a.Category) }, false));
+            b.Append("</w:tbl>");
+            b.Append(P("Действующие требования по защите информации (обеспечению безопасности значимых объектов КИИ)", "Heading2"));
+            AppendList(b, ReportCatalog.Texts(ReportCatalog.Requirements, a.Requirements), "Не указаны.");
+            if (a.Passport != null) AppendPassportWord(b, a);
+
+            b.Append(P("2. Дата проведения оценки (п. 35 б)", "Heading1"));
+            b.Append(P(DateText(a.Date), null));
+
+            b.Append(P("3. Лица, проводившие оценку (п. 35 в)", "Heading1"));
+            List<ReportPerson> assessors = Assessors(a);
+            AppendPeople(b, assessors, false);
+            if (a.AssessmentKind == "external") b.Append(P("Внешняя оценка. Лицензия организации на деятельность в области защиты конфиденциальной информации: " + Empty(a.ExternalLicense) + ".", null));
+
+            b.Append(P("4. Лица, участвовавшие в проведении оценки, в том числе предоставлявшие исходные данные (п. 35 г)", "Heading1"));
+            AppendPeople(b, a.Participants.Where(p => p.Role != "assessor").ToList(), true);
+
+            b.Append(P("5. Сведения о результатах предыдущей оценки (п. 35 д)", "Heading1"));
+            AppendPreviousWord(b, a, s);
+
+            b.Append(P("6. Исходные данные (п. 35 е)", "Heading1"));
+            AppendList(b, ReportCatalog.Texts(ReportCatalog.SourceData, a.SourceData), "Не указаны.");
+            if (!String.IsNullOrWhiteSpace(a.SourceDataNote)) b.Append(P(a.SourceDataNote, null));
+            b.Append(P("Подтверждающие документы по каждому направлению приведены в разделе 10.", "Small"));
+
+            b.Append(P("7. Методы и инструменты оценки (п. 35 ж)", "Heading1"));
+            b.Append(P("Методы", "Heading2"));
+            AppendList(b, ReportCatalog.Texts(ReportCatalog.Methods, a.Methods), "Не указаны.");
+            b.Append(P("Инструменты", "Heading2"));
+            AppendList(b, ReportCatalog.Texts(ReportCatalog.Instruments, a.Instruments), "Не указаны.");
+            if (!String.IsNullOrWhiteSpace(a.ToolsNote)) b.Append(P(a.ToolsNote, null));
+
+            b.Append(P("8. Перечень направлений деятельности (областей оценки) (п. 35 з)", "Heading1"));
+            b.Append(P("Включено в область оценки: " + s.Count + " из " + Data.DirectionNames.Length + ". Неприменимые направления исключены по п. 13 Методики с указанием основания.", null));
+            b.Append(TableStart(new int[] { 450, 4300, 1300, 3450 }));
+            b.Append(TableRow(new string[] { "№", "Направление", "Область оценки", "Основание исключения" }, true));
             for (int i = 0; i < Data.DirectionNames.Length; i++)
             {
-                DirectionAssessment d = GetDirection(a, i); DirectionResult r = Calc.Direction(d);
-                b.Append(TableRow(new string[] { (i + 1).ToString(Inv), Data.DirectionNames[i], d.Included ? (r.Complete ? "Заполнено" : "Частично") : "Исключено", d.Included ? r.Score.ToString("0.000", Inv) : "—", d.Included ? r.Level.ToString(Inv) : "—", d.Target.ToString(Inv), d.Included ? r.Gap.ToString(Inv) : "—", d.Included ? r.Answered + "/" + Data.Criteria.Length : "—" }, false));
+                DirectionAssessment d = GetDirection(a, i);
+                b.Append(TableRow(new string[] { (i + 1).ToString(Inv), Data.DirectionNames[i], d.Included ? "Включено" : "Исключено", d.Included ? "" : Empty(d.Evidence) }, false));
             }
             b.Append("</w:tbl>");
-            b.Append(P("Примечания к оценке", "Heading2")); b.Append(P(Empty(a.Notes), null));
-            b.Append(PageBreak());
-            b.Append(P("2. Детализация направлений", "Heading1"));
-            for (int i = 0; i < Data.DirectionNames.Length; i++)
-            {
-                DirectionAssessment d = GetDirection(a, i); DirectionResult r = Calc.Direction(d);
-                b.Append(P((i + 1) + ". " + Data.DirectionNames[i], "Heading2"));
-                b.Append(P(d.Included ? "P = " + r.Score.ToString("0.000", Inv) + ". Уровень " + r.Level + " — " + Calc.LevelName(r.Level) + ". Цель: " + d.Target + ". Разрыв: " + r.Gap + ". Ответы: " + r.Answered + "/" + Data.Criteria.Length + (r.Complete ? "." : ". Результат предварительный; незаполненные ответы учитываются как 0.") : "Направление исключено из оценки; ответы и доказательства сохранены для справки.", d.Included && !r.Complete ? "Warning" : null));
-                b.Append(TableStart(new int[] { 400, 2900, 700, 750, 4550 }));
-                b.Append(TableRow(new string[] { "№", "Критерий", "Вес", "Баллы", "Выбранный ответ" }, true));
-                for (int c = 0; c < Data.Criteria.Length; c++)
-                {
-                    double? answer = GetAnswer(d, c);
-                    b.Append(TableRow(new string[] { (c + 1).ToString(Inv), Data.Criteria[c].Name, Data.Criteria[c].Weight.ToString("0.00", Inv), answer.HasValue ? answer.Value.ToString("0.##", Inv) : "—", AnswerText(c, answer) }, false));
-                }
-                b.Append("</w:tbl>");
-                b.Append(P("Доказательства и комментарии", "Heading3")); b.Append(P(Empty(d.Evidence), null));
-            }
-            b.Append(PageBreak());
-            b.Append(P("3. Рекомендации", "Heading1"));
-            bool any = false;
+
+            b.Append(P("9. Степень выполнения видов требований Dij и значения Pзн (п. 35 и)", "Heading1"));
+            b.Append(P("Dij = wj × aj (п. 29); Pi = Σ Dij по восьми видам требований (п. 30). Столбцы D1–D8: документирование, выполнение, инструменты, квалификация, контроль, обучение, внешний аудит, актуализация.", "Small"));
+            b.Append(TableStart(new int[] { 420, 2600, 700, 700, 700, 700, 700, 700, 700, 700, 780 }));
+            b.Append(TableRow(new string[] { "№", "Направление", "D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8", "Pзн" }, true));
             for (int i = 0; i < Data.DirectionNames.Length; i++)
             {
                 DirectionAssessment d = GetDirection(a, i); if (!d.Included) continue;
                 DirectionResult r = Calc.Direction(d);
-                if (r.Recommendations == null || r.Recommendations.Count == 0) continue;
-                any = true; b.Append(P((i + 1) + ". " + Data.DirectionNames[i], "Heading2"));
-                for (int n = 0; n < r.Recommendations.Count; n++) b.Append(P((n + 1) + ". " + r.Recommendations[n], null));
+                string[] cells = new string[11]; cells[0] = (i + 1).ToString(Inv); cells[1] = Data.DirectionNames[i];
+                for (int c = 0; c < 8; c++) { double? x = GetAnswer(d, c); cells[c + 2] = x.HasValue ? (x.Value * Data.Criteria[c].Weight).ToString("0.###", Inv) : "—"; }
+                cells[10] = r.Score.ToString("0.000", Inv);
+                b.Append(TableRow(cells, false));
             }
-            if (!any) b.Append(P("По введённым данным дополнительных рекомендаций нет. Сохраняйте доказательства и периодически пересматривайте оценку.", null));
-            AppendAnalysisWord(b, analysis);
-            b.Append(P("7. Основание и ограничения", "Heading1"));
-            b.Append(P(MethodNote(), "Small"));
-            b.Append(P("Источник: " + Data.SourceUrl + ". Дата версии методики: " + Data.MethodDate + ".", "Small"));
-            if (!String.IsNullOrWhiteSpace(a.Assessor) || !String.IsNullOrWhiteSpace(a.AssessorPosition) || !String.IsNullOrWhiteSpace(a.ApproverName) || !String.IsNullOrWhiteSpace(a.ApproverPosition))
+            b.Append("</w:tbl>");
+
+            b.Append(P("10. Текущий уровень зрелости по направлениям (п. 35 к)", "Heading1"));
+            for (int i = 0; i < Data.DirectionNames.Length; i++)
             {
-                b.Append(P("Подписи", "Heading1"));
-                if (!String.IsNullOrWhiteSpace(a.Assessor) || !String.IsNullOrWhiteSpace(a.AssessorPosition))
-                    b.Append(SignatureBlock("Составил", a.AssessorPosition, a.Assessor));
-                if (!String.IsNullOrWhiteSpace(a.ApproverName) || !String.IsNullOrWhiteSpace(a.ApproverPosition))
-                    b.Append(SignatureBlock("УТВЕРЖДАЮ", a.ApproverPosition, a.ApproverName));
+                DirectionAssessment d = GetDirection(a, i); if (!d.Included) continue;
+                DirectionResult r = Calc.Direction(d);
+                b.Append(P((i + 1) + ". " + Data.DirectionNames[i], "Heading2"));
+                b.Append(TableStart(new int[] { 400, 2300, 650, 650, 5500 }));
+                b.Append(TableRow(new string[] { "j", "Вид требования", "a", "Dij", "Реализация требования (таблица 2)" }, true));
+                for (int c = 0; c < Data.Criteria.Length; c++)
+                {
+                    double? answer = GetAnswer(d, c);
+                    b.Append(TableRow(new string[] { (c + 1).ToString(Inv), Data.Criteria[c].Name, answer.HasValue ? answer.Value.ToString("0.##", Inv) : "—", answer.HasValue ? (answer.Value * Data.Criteria[c].Weight).ToString("0.###", Inv) : "—", AnswerText(c, answer) }, false));
+                }
+                b.Append("</w:tbl>");
+                b.Append(P("Подтверждающие документы, инструментальные средства, отчётная документация: " + Empty(d.Evidence), null));
+                b.Append(P("Заключение: Pзн = " + r.Score.ToString("0.000", Inv) + "; по таблице 3 Методики текущий уровень зрелости направления Узит = " + r.Level + " («" + Calc.LevelName(r.Level) + "»)" + (r.Complete ? "." : ". Результат предварительный: незаполненные виды требований учтены как 0."), r.Complete ? null : "Warning"));
             }
+            b.Append(P("Расчёт уровня зрелости Узи (п. 10)", "Heading2"));
+            b.Append(P(UziFormula(a, s), null));
+
+            b.Append(P("11. Графическая интерпретация (п. 35 л)", "Heading1"));
+            b.Append(P("Диаграмма профиля: текущий уровень Узитi и целевой уровень Узицi по каждому направлению (п. 17).", "Small"));
+            b.Append(ChartParagraph());
+            b.Append(TableStart(new int[] { 450, 4900, 1050, 1050, 1050, 1000 }));
+            b.Append(TableRow(new string[] { "№", "Направление", "Узит", "Узиц", "Разрыв", "Pзн" }, true));
+            for (int i = 0; i < Data.DirectionNames.Length; i++)
+            {
+                DirectionAssessment d = GetDirection(a, i); if (!d.Included) continue; DirectionResult r = Calc.Direction(d);
+                b.Append(TableRow(new string[] { (i + 1).ToString(Inv), Data.DirectionNames[i], r.Level.ToString(Inv), d.Target.ToString(Inv), r.Gap.ToString(Inv), r.Score.ToString("0.000", Inv) }, false));
+            }
+            b.Append("</w:tbl>");
+
+            b.Append(P("12. Направления, по которым не достигнуты целевые значения (п. 35 м)", "Heading1"));
+            AppendUnmetWord(b, a);
+
+            b.Append(P("13. Рекомендации по совершенствованию защиты информации (п. 35 н)", "Heading1"));
+            AppendPlanWord(b, a, analysis);
+
+            if (!String.IsNullOrWhiteSpace(a.Notes)) { b.Append(P("Примечания к оценке", "Heading2")); b.Append(P(a.Notes, null)); }
+
+            b.Append(P("Подписи (п. 36)", "Heading1"));
+            b.Append(P("Отчёт подписывается специалистами, проводившими оценку, и утверждается руководителем либо ответственным лицом за защиту информации. Оператор несёт ответственность за качество и объективность проведённой оценки.", "Small"));
+            List<ReportPerson> signers = assessors.Where(p => !String.IsNullOrWhiteSpace(p.Name) || !String.IsNullOrWhiteSpace(p.Position)).ToList();
+            if (signers.Count == 0) b.Append(SignatureBlock("Оценку проводил", "", ""));
+            foreach (ReportPerson p in signers) b.Append(SignatureBlock("Оценку проводил", p.Position, p.Name));
+
+            AppendAnalysisWord(b, analysis);
+            b.Append(P("Приложение В. Основание расчёта и ограничения", "Heading1"));
+            b.Append(P(MethodNote(), "Small"));
+            b.Append(P("Методика оценки уровня зрелости, утверждённая ФСТЭК России " + Data.MethodDate + ". Алгоритм сверен с публичным калькулятором " + Data.SourceUrl + ".", "Small"));
             b.Append("<w:sectPr><w:footerReference w:type=\"default\" r:id=\"rFooter\"/><w:pgSz w:w=\"11906\" w:h=\"16838\"/><w:pgMar w:top=\"1000\" w:right=\"850\" w:bottom=\"1000\" w:left=\"1000\" w:header=\"400\" w:footer=\"400\"/><w:cols w:space=\"708\"/></w:sectPr></w:body></w:document>");
+            return b.ToString();
+        }
+
+        private static string KindText(Assessment a)
+        {
+            return a.AssessmentKind == "external" ? "внешняя (с привлечением организации, имеющей лицензию; п. 6 Методики)" : "внутренняя (самостоятельная; п. 6 Методики)";
+        }
+        private static string CategoryLongText(int category)
+        {
+            switch (category)
+            {
+                case 1: return "ГИС 3 класса, иные ИС госорганов, ИСПДн УЗ-3/4, ЗОКИИ 3 категории — рекомендуемый целевой уровень не ниже 1 (п. 11)";
+                case 2: return "ГИС 2 класса, ИСПДн УЗ-2, ЗОКИИ 2 категории — рекомендуемый целевой уровень не ниже 2 (п. 11)";
+                case 3: return "ГИС 1 класса, ИСПДн УЗ-1, ЗОКИИ 1 категории — рекомендуемый целевой уровень не ниже 3 (п. 11)";
+                default: return "Не определены — целевой уровень установлен оператором";
+            }
+        }
+        private static void AppendList(StringBuilder b, string[] items, string empty)
+        {
+            if (items.Length == 0) { b.Append(P(empty, "Warning")); return; }
+            for (int i = 0; i < items.Length; i++) b.Append(P((i + 1) + ") " + items[i], null));
+        }
+        private static List<ReportPerson> Assessors(Assessment a)
+        {
+            List<ReportPerson> list = new List<ReportPerson> { new ReportPerson { Role = "assessor", Name = a.Assessor, Position = a.AssessorPosition, Organization = a.AssessorOrganization, Contact = a.AssessorContact } };
+            list.AddRange(a.Participants.Where(p => p.Role == "assessor"));
+            return list;
+        }
+        private static void AppendPeople(StringBuilder b, List<ReportPerson> people, bool withRole)
+        {
+            people = people.Where(p => !String.IsNullOrWhiteSpace(p.Name) || !String.IsNullOrWhiteSpace(p.Position)).ToList();
+            if (people.Count == 0) { b.Append(P("Не указаны.", "Warning")); return; }
+            b.Append(withRole ? TableStart(new int[] { 2100, 1900, 1900, 1900, 1700 }) : TableStart(new int[] { 2500, 2400, 2400, 2200 }));
+            b.Append(TableRow(withRole ? new string[] { "ФИО", "Должность", "Организация", "Контакты", "Роль" } : new string[] { "ФИО", "Должность", "Организация", "Контакты" }, true));
+            foreach (ReportPerson p in people)
+                b.Append(TableRow(withRole ? new string[] { Empty(p.Name), Empty(p.Position), Empty(p.Organization), Empty(p.Contact), ReportCatalog.RoleText(p.Role) } : new string[] { Empty(p.Name), Empty(p.Position), Empty(p.Organization), Empty(p.Contact) }, false));
+            b.Append("</w:tbl>");
+        }
+        private static void AppendPreviousWord(StringBuilder b, Assessment a, Summary s)
+        {
+            if (a.Previous == null) { b.Append(P("Предыдущая оценка уровня зрелости не проводилась (сведения отсутствуют).", null)); return; }
+            DynamicsResult dyn = ReportFacts.Dynamics(a);
+            b.Append(P("Дата предыдущей оценки: " + DateText(a.Previous.Date) + ". Достигнутое значение Узи: " + a.Previous.Uzi.ToString("0.00", Inv) + " — " + Calc.LevelName((int)Math.Floor(a.Previous.Uzi)) + "." + (String.IsNullOrWhiteSpace(a.Previous.Source) ? "" : " Источник: " + a.Previous.Source + "."), null));
+            b.Append(P("Текущее значение Узи: " + (s.Count == 0 ? "не рассчитано" : s.Average.ToString("0.00", Inv)) + ". Вывод по п. 33 Методики: " + dyn.Title.ToLower() + ". " + dyn.Explanation, "Heading3"));
+            if (a.Previous.Directions != null)
+            {
+                b.Append(TableStart(new int[] { 450, 5150, 1300, 1300, 1300 }));
+                b.Append(TableRow(new string[] { "№", "Направление", "Было", "Стало", "Изменение" }, true));
+                foreach (PreviousDirection before in a.Previous.Directions)
+                {
+                    DirectionAssessment now = GetDirection(a, before.Id - 1); int after = Calc.Direction(now).Level;
+                    string was = before.Included ? before.Level.ToString(Inv) : "исключено", became = now.Included ? after.ToString(Inv) : "исключено";
+                    string change = !before.Included || !now.Included ? (before.Included == now.Included ? "—" : "изменена область") : after > before.Level ? "рост" : after < before.Level ? "снижение" : "без изменений";
+                    b.Append(TableRow(new string[] { before.Id.ToString(Inv), Data.DirectionNames[before.Id - 1], was, became, change }, false));
+                }
+                b.Append("</w:tbl>");
+            }
+            if (dyn.CriterionDecreases.Count > 0)
+            {
+                b.Append(P("Снижение по видам требований", "Heading3"));
+                foreach (string line in dyn.CriterionDecreases) b.Append(P("• " + line, null));
+            }
+        }
+        private static string UziFormula(Assessment a, Summary s)
+        {
+            if (s.Count == 0) return "Область оценки пуста: Узи не рассчитывается.";
+            List<string> levels = new List<string>(); int sum = 0;
+            foreach (DirectionAssessment d in a.Directions.Where(x => x.Included).OrderBy(x => x.Id)) { int l = Calc.Direction(d).Level; sum += l; levels.Add(l.ToString(Inv)); }
+            return "Узи = ΣУзитi / N = (" + String.Join(" + ", levels) + ") / " + s.Count + " = " + sum + " / " + s.Count + " = " + s.Average.ToString("0.00", Inv) + ". По таблице 1 Методики уровень зрелости — «" + Calc.LevelName((int)Math.Floor(s.Average)) + "»" + (s.Complete ? "." : ". Расчёт предварительный.");
+        }
+        private static void AppendUnmetWord(StringBuilder b, Assessment a)
+        {
+            bool any = false;
+            foreach (DirectionAssessment d in a.Directions.Where(x => x.Included).OrderBy(x => x.Id))
+            {
+                DirectionResult r = Calc.Direction(d); if (r.Level >= d.Target) continue;
+                any = true;
+                b.Append(P(d.Id + ". " + Data.DirectionNames[d.Id - 1] + ": Узит = " + r.Level + ", Узиц = " + d.Target, "Heading3"));
+                double[] need = Calc.Minima[d.Target - 1]; bool listed = false;
+                for (int j = 0; j < 8; j++)
+                {
+                    double weighted = d.Answers[j].GetValueOrDefault() * Data.Criteria[j].Weight;
+                    if (weighted + 1e-9 >= need[j]) continue;
+                    listed = true;
+                    b.Append(P("• " + Data.Criteria[j].Name + ": D = " + weighted.ToString("0.###", Inv) + (d.Answers[j].HasValue ? "" : " (не оценено)") + ", требуется не менее " + need[j].ToString("0.###", Inv) + " (таблица 3).", null));
+                }
+                if (!listed) b.Append(P("• Обязательные значения видов требований выполнены, но Pзн = " + r.Score.ToString("0.000", Inv) + " ниже порога " + Calc.Thresholds[d.Target - 1].ToString("0.000", Inv) + ".", null));
+            }
+            if (!any) b.Append(P("Целевые значения достигнуты по всем направлениям области оценки.", null));
+        }
+        private static void AppendPlanWord(StringBuilder b, Assessment a, AssessmentAnalysis analysis)
+        {
+            b.Append(P("Мероприятия сформированы по видам требований, не обеспечивающим целевой уровень (таблица 3). «Оценить» — вид требования не оценён; «Улучшить» — выполнить условие и подтвердить результат.", "Small"));
+            if (analysis.Deficits.Length == 0) { b.Append(P(analysis.HasScope ? "Мероприятия по достижению целевых уровней не требуются. По п. 35 Методики при достижении целей определяются новые целевые уровни." : "Нет включённых направлений.", null)); return; }
+            string responsible = String.IsNullOrWhiteSpace(a.PlanResponsible) ? "____________" : a.PlanResponsible;
+            string deadline = String.IsNullOrWhiteSpace(a.PlanDeadline) ? "____________" : a.PlanDeadline;
+            b.Append(TableStart(new int[] { 420, 2300, 3700, 1100, 1250, 830 }));
+            b.Append(TableRow(new string[] { "№", "Направление и вид требования", "Мероприятие", "Сейчас / требуется", "Ответственный", "Срок" }, true));
+            for (int i = 0; i < analysis.Deficits.Length; i++)
+            {
+                DeficitRecord d = analysis.Deficits[i];
+                b.Append(TableRow(new string[] { (i + 1).ToString(Inv), d.DirectionId + ". " + d.DirectionName + "\n" + d.CriterionName + "\n" + ActionLabel(d.Type), ConditionAndAction(d.ConditionText, d.Action), NullableNumber(d.Current) + " / " + NullableNumber(d.Required), responsible, deadline }, false));
+            }
+            b.Append("</w:tbl>");
+        }
+        private static string ApprovalBlock(string position, string name)
+        {
+            string right = "<w:pPr><w:jc w:val=\"right\"/></w:pPr>";
+            StringBuilder b = new StringBuilder();
+            foreach (string line in new[] { "УТВЕРЖДАЮ", position, "____________ " + (name ?? ""), "«___» ____________ 20___ г." })
+                if (!String.IsNullOrWhiteSpace(line)) b.Append("<w:p>" + right + "<w:r><w:t xml:space=\"preserve\">" + WordText(line) + "</w:t></w:r></w:p>");
             return b.ToString();
         }
 
         private static void AppendPassportWord(StringBuilder b, Assessment a)
         {
             SystemPassport p = a.Passport;
-            b.Append(P("Описание объекта и состава", "Heading1"));
+            b.Append(P("Описание объекта и состава", "Heading2"));
             b.Append(P(SystemPassports.Description(p), null));
             b.Append(P("Основа конфигурации: " + SystemPassports.TemplateName(p) + ". Параметры ниже отражают введённые сведения об объекте. Они не определяют оценки зрелости, категорию или класс защищённости.", "Small"));
             b.Append(TableStart(new int[] { 3600, 5900 }));
@@ -219,25 +393,25 @@ namespace MaturityApp
             foreach (KeyValuePair<string, string> fact in PassportFacts(p))
                 b.Append(TableRow(new string[] { fact.Key, fact.Value }, false));
             b.Append("</w:tbl>");
-            b.Append(P("Состав оборудования", "Heading2"));
+            b.Append(P("Состав оборудования", "Heading3"));
             b.Append(TableStart(new int[] { 2400, 1000, 6100 }));
             b.Append(TableRow(new string[] { "Компонент", "Количество", "Назначение" }, true));
             foreach (SystemComponent component in SystemPassports.Components(p))
                 b.Append(TableRow(new string[] { component.Name, component.Count.ToString(Inv), component.Purpose }, false));
             b.Append("</w:tbl>");
-            b.Append(P("Текстовая схема подключения", "Heading2"));
+            b.Append(P("Текстовая схема подключения", "Heading3"));
             b.Append(P(SystemPassports.Topology(p), null));
             AppendPassportUnknownWord(b, p);
             if (!String.IsNullOrWhiteSpace(p.Notes))
             {
-                b.Append(P("Примечания к объекту", "Heading2"));
+                b.Append(P("Примечания к объекту", "Heading3"));
                 b.Append(P(p.Notes, null));
             }
         }
 
         private static void AppendPassportUnknownWord(StringBuilder b, SystemPassport p)
         {
-            b.Append(P("Неуточнённые характеристики", "Heading2"));
+            b.Append(P("Неуточнённые характеристики", "Heading3"));
             string[] unknown = SystemPassports.UnknownFields(p);
             if (unknown.Length == 0) b.Append(P("Все характеристики паспорта уточнены.", null));
             else
@@ -309,7 +483,7 @@ namespace MaturityApp
         private static void AppendAnalysisWord(StringBuilder b, AssessmentAnalysis analysis)
         {
             b.Append(PageBreak());
-            b.Append(P("4. Профиль критериев", "Heading1"));
+            b.Append(P("Приложение А. Профиль видов требований", "Heading1"));
             b.Append(P("Средняя оценка рассчитана только по заполненным ответам включённых направлений. Пропуски не входят в среднее; выбранный 0 входит. Эти средние не являются показателем зрелости Узи. Покрытие показывает долю направлений с ответом по критерию. Известные дефициты учитывают выбранные оценки ниже требуемого минимума; пропуски показаны отдельно.", "Small"));
             b.Append(TableStart(new int[] { 400, 3200, 1100, 1300, 1300, 2000 }));
             b.Append(TableRow(new string[] { "№", "Критерий", "Средняя оценка", "Ответы / включено", "Покрытие, %", "Известные дефициты" }, true));
@@ -318,26 +492,7 @@ namespace MaturityApp
             b.Append("</w:tbl>");
             if (!analysis.HasScope) b.Append(P("Нет включённых направлений. Для расчёта профиля включите направления и заполните ответы.", "Warning"));
 
-            b.Append(P("5. План достижения целевых уровней", "Heading1"));
-            b.Append(P("План сформирован из текущих ответов и целевого уровня каждого направления. «Оценить» означает проверить фактическое состояние и выбрать подтверждённый ответ. «Улучшить» означает выполнить указанное условие и подтвердить результат. Исполнитель и срок оставлены для заполнения. Пропуск при нулевом минимуме не требует выставлять 0 и отдельно помечен как не влияющий на минимум цели.", "Small"));
-            b.Append(P("Строки «Порог P» показывают контрольный суммарный показатель. Это не отдельные работы сверх мероприятий по критериям: в текущей таблице 3 сумма обязательных минимумов равна порогу P.", "Small"));
-            if (analysis.Deficits.Length == 0)
-                b.Append(P(analysis.HasScope ? "Недостатков и незаполненных ответов по включённым направлениям не выявлено." : "План не сформирован: нет включённых направлений.", null));
-            else
-            {
-                b.Append(TableStart(new int[] { 450, 2400, 1250, 1100, 3000, 1100 }));
-                b.Append(TableRow(new string[] { "№", "Направление и критерий", "Сейчас / требуется", "Тип", "Полное условие и мероприятие", "Исполнитель / срок" }, true));
-                for (int i = 0; i < analysis.Deficits.Length; i++)
-                {
-                    DeficitRecord d = analysis.Deficits[i];
-                    string target = "Сейчас: " + NullableNumber(d.Current) + "\nТребуется: " + NullableNumber(d.Required);
-                    string type = ActionLabel(d.Type) + (d.BlockingTarget ? "\nВлияет на цель" : "\nНе влияет на минимум цели");
-                    b.Append(TableRow(new string[] { (i + 1).ToString(Inv), d.DirectionId + ". " + d.DirectionName + "\n" + d.CriterionName, target, type, ConditionAndAction(d.ConditionText, d.Action), "Исполнитель:\n____________\nСрок:\n____________" }, false));
-                }
-                b.Append("</w:tbl>");
-            }
-
-            b.Append(P("6. Общие дефициты", "Heading1"));
+            b.Append(P("Приложение Б. Общие дефициты по направлениям", "Heading1"));
             b.Append(P("Одинаковые требования сгруппированы по критерию, типу действия и требуемой оценке. Число направлений помогает выбрать общие мероприятия. Номера соответствуют сводной таблице; результат и подтверждающие материалы проверяются по каждому направлению.", "Small"));
             b.Append(P(Analysis.PriorityExplanation, "Small"));
             if (analysis.GroupedActions.Length == 0) b.Append(P("Общих мероприятий по введённым данным нет.", null));
@@ -366,16 +521,16 @@ namespace MaturityApp
             return Sheet(rows, "A1:K" + (row - 1), "<col min=\"1\" max=\"1\" width=\"8\" customWidth=\"1\"/><col min=\"2\" max=\"2\" width=\"42\" customWidth=\"1\"/><col min=\"3\" max=\"3\" width=\"10\" customWidth=\"1\"/><col min=\"4\" max=\"5\" width=\"17\" customWidth=\"1\"/><col min=\"6\" max=\"11\" width=\"14\" customWidth=\"1\"/>", 4, "A4:K" + (row - 1), TwoTitleMerges("K"), true);
         }
 
-        private static string DeficitPlanSheet(AssessmentAnalysis analysis)
+        private static string DeficitPlanSheet(AssessmentAnalysis analysis, string responsible, string deadline)
         {
             StringBuilder rows = new StringBuilder();
             rows.Append(Row(1, T("A1", "ПЛАН ДОСТИЖЕНИЯ ЦЕЛЕВЫХ УРОВНЕЙ", 1), 30));
-            rows.Append(Row(2, T("A2", "«Оценить» — проверить фактическое состояние и выбрать подтверждённый ответ. «Улучшить» — выполнить условие и подтвердить результат. Пропуск при нулевом минимуме не требует выставлять 0. Строки «Порог P» — контроль суммы, а не отдельные работы сверх критериев: сумма обязательных минимумов текущей таблицы 3 равна порогу P. Исполнитель и срок оставлены пустыми.", 5), 65));
+            rows.Append(Row(2, T("A2", "«Оценить» — проверить фактическое состояние и выбрать подтверждённый ответ. «Улучшить» — выполнить условие и подтвердить результат. Пропуск при нулевом минимуме не требует выставлять 0. Строки «Порог P» — контроль суммы, а не отдельные работы сверх критериев: сумма обязательных минимумов текущей таблицы 3 равна порогу P. Ответственный и срок — из данных для отчёта (п. 35 н Методики).", 5), 65));
             rows.Append(Row(4, HeaderCells(new string[] { "№ направления", "Направление", "Критерий", "Сейчас", "Требуется", "Тип действия", "Влияет на цель", "Полное условие", "Мероприятие", "Исполнитель", "Срок" }, 4), 42));
             int row = 5;
             foreach (DeficitRecord d in analysis.Deficits)
             {
-                rows.Append(Row(row, N("A" + row, d.DirectionId, 3) + T("B" + row, d.DirectionName, 0) + T("C" + row, d.CriterionName, 0) + OptionalNumber("D" + row, d.Current) + OptionalNumber("E" + row, d.Required) + T("F" + row, ActionLabel(d.Type), d.Type == "assess" ? 7 : 0) + T("G" + row, d.BlockingTarget ? "Да" : "Нет", 0) + T("H" + row, d.ConditionText ?? "", 0) + T("I" + row, d.Action ?? "", 0) + T("J" + row, "", 0) + T("K" + row, "", 0), 120));
+                rows.Append(Row(row, N("A" + row, d.DirectionId, 3) + T("B" + row, d.DirectionName, 0) + T("C" + row, d.CriterionName, 0) + OptionalNumber("D" + row, d.Current) + OptionalNumber("E" + row, d.Required) + T("F" + row, ActionLabel(d.Type), d.Type == "assess" ? 7 : 0) + T("G" + row, d.BlockingTarget ? "Да" : "Нет", 0) + T("H" + row, d.ConditionText ?? "", 0) + T("I" + row, d.Action ?? "", 0) + T("J" + row, responsible ?? "", 0) + T("K" + row, deadline ?? "", 0), 120));
                 row++;
             }
             if (row == 5)
@@ -472,6 +627,69 @@ namespace MaturityApp
             foreach (string range in mergedRanges) merges.Append("<mergeCell ref=\"" + range + "\"/>");
             merges.Append("</mergeCells>");
             return Sheet(rows, "A1:I" + (end + 5), "<col min=\"1\" max=\"1\" width=\"8\" customWidth=\"1\"/><col min=\"2\" max=\"2\" width=\"53\" customWidth=\"1\"/><col min=\"3\" max=\"3\" width=\"18\" customWidth=\"1\"/><col min=\"4\" max=\"9\" width=\"13\" customWidth=\"1\"/>", headerRow, "A" + headerRow + ":I" + end, merges.ToString(), false);
+        }
+
+        private static string ReportInfoSheet(Assessment a, Summary s)
+        {
+            StringBuilder rows = new StringBuilder();
+            List<string> merges = new List<string> { "A1:E1" };
+            rows.Append(Row(1, T("A1", "СВЕДЕНИЯ ОБ ОЦЕНКЕ ПО П. 35 МЕТОДИКИ", 1), 30));
+            int row = 3;
+            Action<string, string> line = (label, value) => { rows.Append(Row(row, T("A" + row, label, 4) + T("B" + row, value, 0), Math.Min(300, 24 + 16 * (value ?? "").Split('\n').Length))); merges.Add("B" + row + ":E" + row); row++; };
+            line("а) Оператор", Empty(a.Organization));
+            line("а) Объект (область) оценки", Empty(a.SystemName));
+            line("а) Класс / категория", CategoryLongText(a.Category));
+            line("а) Действующие требования", Joined(ReportCatalog.Texts(ReportCatalog.Requirements, a.Requirements)));
+            line("б) Дата оценки", DateText(a.Date));
+            line("Вид оценки (п. 6)", KindText(a) + (a.AssessmentKind == "external" ? ". Лицензия: " + Empty(a.ExternalLicense) : ""));
+            DynamicsResult dyn = ReportFacts.Dynamics(a);
+            line("д) Предыдущая оценка", a.Previous == null ? "Не проводилась" : DateText(a.Previous.Date) + ": Узи " + a.Previous.Uzi.ToString("0.00", Inv) + ". " + dyn.Title + ". " + dyn.Explanation);
+            line("е) Исходные данные", Joined(ReportCatalog.Texts(ReportCatalog.SourceData, a.SourceData)) + (String.IsNullOrWhiteSpace(a.SourceDataNote) ? "" : "\n" + a.SourceDataNote));
+            line("ж) Методы", Joined(ReportCatalog.Texts(ReportCatalog.Methods, a.Methods)));
+            line("ж) Инструменты", Joined(ReportCatalog.Texts(ReportCatalog.Instruments, a.Instruments)) + (String.IsNullOrWhiteSpace(a.ToolsNote) ? "" : "\n" + a.ToolsNote));
+            line("к) Расчёт Узи", UziFormula(a, s));
+            line("н) Ответственный / срок", Empty(a.PlanResponsible) + " / " + Empty(a.PlanDeadline));
+            string[] missing = ReportFacts.Missing(a);
+            if (missing.Length > 0) line("Не заполнено", String.Join("\n", missing));
+            row++;
+            rows.Append(Row(row, T("A" + row, "в), г) ЛИЦА, ПРОВОДИВШИЕ И УЧАСТВОВАВШИЕ В ОЦЕНКЕ", 4), 26)); merges.Add("A" + row + ":E" + row); row++;
+            rows.Append(Row(row, HeaderCells(new string[] { "Роль", "ФИО", "Должность", "Организация", "Контакты" }, row), 30)); row++;
+            foreach (ReportPerson p in Assessors(a).Concat(a.Participants.Where(x => x.Role != "assessor")))
+            {
+                if (String.IsNullOrWhiteSpace(p.Name) && String.IsNullOrWhiteSpace(p.Position)) continue;
+                rows.Append(Row(row, T("A" + row, ReportCatalog.RoleText(p.Role), 0) + T("B" + row, p.Name, 0) + T("C" + row, p.Position, 0) + T("D" + row, p.Organization, 0) + T("E" + row, p.Contact, 0), 36)); row++;
+            }
+            StringBuilder mergeXml = new StringBuilder("<mergeCells count=\"" + merges.Count + "\">");
+            foreach (string range in merges) mergeXml.Append("<mergeCell ref=\"" + range + "\"/>");
+            mergeXml.Append("</mergeCells>");
+            return Sheet(rows, "A1:E" + (row - 1), "<col min=\"1\" max=\"1\" width=\"30\" customWidth=\"1\"/><col min=\"2\" max=\"5\" width=\"34\" customWidth=\"1\"/>", 1, "", mergeXml.ToString(), false);
+        }
+        private static string Joined(string[] items) { return items.Length == 0 ? "Не указаны" : String.Join("\n", items.Select((x, i) => (i + 1) + ") " + x)); }
+
+        private static string DijSheet(Assessment a)
+        {
+            StringBuilder rows = new StringBuilder();
+            rows.Append(Row(1, T("A1", "СТЕПЕНЬ ВЫПОЛНЕНИЯ ВИДОВ ТРЕБОВАНИЙ Dij И Pзн (п. 35 и)", 1), 30));
+            rows.Append(Row(2, T("A2", "Dij = wj × aj (п. 29), Pзн = Σ Dij (п. 30), Узит — по таблице 3. Включены только направления области оценки.", 5), 30));
+            string[] head = new string[13]; head[0] = "№"; head[1] = "Направление";
+            for (int j = 0; j < 8; j++) head[j + 2] = "D" + (j + 1) + " " + Data.Criteria[j].Name;
+            head[10] = "Pзн"; head[11] = "Узит"; head[12] = "Узиц";
+            rows.Append(Row(4, HeaderCells(head, 4), 45));
+            int row = 5;
+            for (int i = 0; i < Data.DirectionNames.Length; i++)
+            {
+                DirectionAssessment d = GetDirection(a, i); if (!d.Included) continue;
+                DirectionResult r = Calc.Direction(d);
+                StringBuilder cells = new StringBuilder(N("A" + row, i + 1, 3) + T("B" + row, Data.DirectionNames[i], 0));
+                for (int j = 0; j < 8; j++)
+                {
+                    string cell = ((char)('C' + j)).ToString() + row; double? x = GetAnswer(d, j);
+                    cells.Append(x.HasValue ? N(cell, x.Value * Data.Criteria[j].Weight, 9) : T(cell, "—", 8));
+                }
+                cells.Append(N("K" + row, r.Score, 9) + N("L" + row, r.Level, 3) + N("M" + row, d.Target, 3));
+                rows.Append(Row(row, cells.ToString(), 36)); row++;
+            }
+            return Sheet(rows, "A1:M" + Math.Max(4, row - 1), "<col min=\"1\" max=\"1\" width=\"6\" customWidth=\"1\"/><col min=\"2\" max=\"2\" width=\"44\" customWidth=\"1\"/><col min=\"3\" max=\"10\" width=\"13\" customWidth=\"1\"/><col min=\"11\" max=\"13\" width=\"9\" customWidth=\"1\"/>", 4, "A4:M" + Math.Max(4, row - 1), TwoTitleMerges("M"), true);
         }
 
         private static string AnswersSheet(Assessment a)

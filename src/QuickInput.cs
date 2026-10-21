@@ -199,40 +199,83 @@ namespace MaturityApp
     }
     public class AnswerTemplate
     {
-        public string Format = "", Name = "";
+        public string Format = "", Name = "", Author = "", Created = "", Description = "";
         public int Version = 1, Category = 1;
         public TemplateDirection[] Directions;
+        // Optional parts added in 1.6. Null means "not part of this template".
+        public SystemPassport Passport;
+        public string[] Requirements, SourceData, Methods, Instruments;
     }
 
-    // A reusable set of grades, scope, category and targets. Organization requisites,
-    // passport and evidence are per object and never enter a template.
+    [Flags]
+    public enum TemplateParts { None = 0, Passport = 1, Grades = 2, Practice = 4, All = 7 }
+
+    // A reusable starting point for an object of the same type in another organization.
+    // Organization requisites, people, dates, evidence and previous results are per object
+    // and never enter a template.
     public static class AnswerTemplates
     {
         const string TemplateFormat = "maturity-answers";
         const int MaximumFileLength = 1024 * 1024;
 
-        public static AnswerTemplate Create(Assessment a, string name)
+        public static AnswerTemplate Create(Assessment a, string name, TemplateParts parts = TemplateParts.All)
         {
             Store.Validate(a);
-            return new AnswerTemplate {
+            AnswerTemplate t = new AnswerTemplate {
                 Format = TemplateFormat, Name = name ?? "", Category = a.Category,
+                Author = Environment.UserName ?? "", Created = DateTime.Now.ToString("yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture),
                 Directions = a.Directions.Select(d => new TemplateDirection { Id = d.Id, Included = d.Included, Target = d.Target, Answers = (double?[])d.Answers.Clone() }).ToArray()
             };
+            if ((parts & TemplateParts.Passport) != 0 && a.Passport != null) t.Passport = SystemPassports.Snapshot(a.Passport);
+            if ((parts & TemplateParts.Practice) != 0)
+            {
+                t.Requirements = (string[])a.Requirements.Clone(); t.SourceData = (string[])a.SourceData.Clone();
+                t.Methods = (string[])a.Methods.Clone(); t.Instruments = (string[])a.Instruments.Clone();
+            }
+            return t;
+        }
+
+        public static TemplateParts PartsOf(AnswerTemplate t)
+        {
+            TemplateParts parts = TemplateParts.Grades;
+            if (t.Passport != null) parts |= TemplateParts.Passport;
+            if (t.Requirements != null || t.SourceData != null || t.Methods != null || t.Instruments != null) parts |= TemplateParts.Practice;
+            return parts;
+        }
+        public static string PartsText(TemplateParts parts)
+        {
+            List<string> names = new List<string>();
+            if ((parts & TemplateParts.Passport) != 0) names.Add("паспорт");
+            if ((parts & TemplateParts.Grades) != 0) names.Add("оценки и область");
+            if ((parts & TemplateParts.Practice) != 0) names.Add("требования, исходные данные, методы");
+            return String.Join(", ", names);
         }
 
         // Validates through a scratch assessment first, so a bad template never partially applies.
-        public static void Apply(Assessment a, AnswerTemplate t)
+        public static void Apply(Assessment a, AnswerTemplate t, TemplateParts parts = TemplateParts.All)
         {
             if (a == null) throw new ArgumentNullException("a");
             Assessment check = Assessment.Create(); check.Category = t.Category;
             if (t.Directions == null || t.Directions.Length != 21) throw new InvalidDataException("В шаблоне должны быть данные по 21 направлению.");
             check.Directions = t.Directions.Select(d => d == null ? null : new DirectionAssessment { Id = d.Id, Included = d.Included, Target = d.Target, Answers = d.Answers == null ? null : (double?[])d.Answers.Clone() }).ToArray();
+            check.Passport = t.Passport == null ? null : SystemPassports.Snapshot(t.Passport);
+            check.Requirements = t.Requirements ?? new string[0]; check.SourceData = t.SourceData ?? new string[0];
+            check.Methods = t.Methods ?? new string[0]; check.Instruments = t.Instruments ?? new string[0];
             Store.Validate(check);
-            a.Category = check.Category;
-            foreach (DirectionAssessment source in check.Directions)
+            parts &= PartsOf(t);
+            if ((parts & TemplateParts.Grades) != 0)
             {
-                DirectionAssessment d = a.Directions.First(x => x.Id == source.Id);
-                d.Included = source.Included; d.Target = source.Target; d.Answers = source.Answers;
+                a.Category = check.Category;
+                foreach (DirectionAssessment source in check.Directions)
+                {
+                    DirectionAssessment d = a.Directions.First(x => x.Id == source.Id);
+                    d.Included = source.Included; d.Target = source.Target; d.Answers = source.Answers;
+                }
+            }
+            if ((parts & TemplateParts.Passport) != 0) a.Passport = check.Passport;
+            if ((parts & TemplateParts.Practice) != 0)
+            {
+                a.Requirements = check.Requirements; a.SourceData = check.SourceData; a.Methods = check.Methods; a.Instruments = check.Instruments;
             }
         }
 
@@ -248,6 +291,7 @@ namespace MaturityApp
                 throw new InvalidDataException("Не удалось прочитать шаблон оценок: некорректный JSON.", ex);
             }
             if (t == null || t.Format != TemplateFormat || t.Version != 1) throw new InvalidDataException("Нужен шаблон оценок версии 1 (.answers.json).");
+            t.Name = t.Name ?? ""; t.Author = t.Author ?? ""; t.Created = t.Created ?? ""; t.Description = t.Description ?? "";
             Apply(Assessment.Create(), t); // validation only
             return t;
         }

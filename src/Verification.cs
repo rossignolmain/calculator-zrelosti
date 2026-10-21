@@ -421,8 +421,8 @@ namespace MaturityApp
                 Check(profile.Version == 1 && profile.Organization == a.Organization && profile.OrganizationShort == a.OrganizationShort && profile.OrganizationAddress == a.OrganizationAddress && profile.City == a.City, "Unicode organization fields survive profile save and load");
                 Check(profile.Assessor == a.Assessor && profile.AssessorPosition == a.AssessorPosition && profile.ApproverName == a.ApproverName && profile.ApproverPosition == a.ApproverPosition, "People fields survive profile save and load");
                 Dictionary<string, object> json = new JavaScriptSerializer().DeserializeObject(File.ReadAllText(profilePath, Encoding.UTF8)) as Dictionary<string, object>;
-                string[] expected = { "Version", "Organization", "OrganizationShort", "OrganizationAddress", "City", "Assessor", "AssessorPosition", "ApproverName", "ApproverPosition" };
-                Check(json != null && json.Keys.OrderBy(x => x).SequenceEqual(expected.OrderBy(x => x)), "Profile serializes exactly the version and eight permitted fields");
+                string[] expected = { "Version", "Organization", "OrganizationShort", "OrganizationAddress", "City", "Assessor", "AssessorPosition", "ApproverName", "ApproverPosition", "AssessorOrganization", "AssessorContact", "Participants" };
+                Check(json != null && json.Keys.OrderBy(x => x).SequenceEqual(expected.OrderBy(x => x)), "Profile serializes exactly the version and eleven permitted fields (requisites, contacts, people)");
                 Check(!Directory.GetFiles(outputFolder, ".organization-profile.json.*.tmp").Any(), "Atomic profile replacement leaves no temporary file");
                 Assessment target = WithLevels(3, 4, 1);
                 target.SystemName = "Новая система"; target.Date = "2025-12-31"; target.Notes = "Сохранить примечания"; target.DocumentNumber = "НОМЕР-99";

@@ -14,13 +14,16 @@ namespace MaturityApp
         public int Version = 1;
         public string Organization = "", OrganizationShort = "", OrganizationAddress = "", City = "";
         public string Assessor = "", AssessorPosition = "", ApproverName = "", ApproverPosition = "";
+        // 1.6: contacts and people for item 35 в, г of the methodology. Optional in older profiles.
+        public string AssessorOrganization = "", AssessorContact = "";
+        public ReportPerson[] Participants = new ReportPerson[0];
     }
 
     public static class ProjectTools
     {
         const int MaximumProfileBytes = 4 * 1024 * 1024;
         static readonly UTF8Encoding Utf8 = new UTF8Encoding(false);
-        static readonly string[] ProfileFields = { "Organization", "OrganizationShort", "OrganizationAddress", "City", "Assessor", "AssessorPosition", "ApproverName", "ApproverPosition" };
+        static readonly string[] ProfileFields = { "Organization", "OrganizationShort", "OrganizationAddress", "City", "Assessor", "AssessorPosition", "ApproverName", "ApproverPosition", "AssessorOrganization", "AssessorContact" };
 
         public static Assessment LoadAssessmentFile(string path)
         {
@@ -96,7 +99,8 @@ namespace MaturityApp
                 Organization = snapshot.Organization, OrganizationShort = snapshot.OrganizationShort,
                 OrganizationAddress = snapshot.OrganizationAddress, City = snapshot.City,
                 Assessor = snapshot.Assessor, AssessorPosition = snapshot.AssessorPosition,
-                ApproverName = snapshot.ApproverName, ApproverPosition = snapshot.ApproverPosition
+                ApproverName = snapshot.ApproverName, ApproverPosition = snapshot.ApproverPosition,
+                AssessorOrganization = snapshot.AssessorOrganization, AssessorContact = snapshot.AssessorContact, Participants = snapshot.Participants
             };
             string json = new JavaScriptSerializer { MaxJsonLength = MaximumProfileBytes }.Serialize(profile);
             if (Utf8.GetByteCount(json) > MaximumProfileBytes) throw new InvalidDataException("Профиль организации слишком большой.");
@@ -139,6 +143,7 @@ namespace MaturityApp
             a.OrganizationAddress = p.OrganizationAddress; a.City = p.City;
             a.Assessor = p.Assessor; a.AssessorPosition = p.AssessorPosition;
             a.ApproverName = p.ApproverName; a.ApproverPosition = p.ApproverPosition;
+            a.AssessorOrganization = p.AssessorOrganization; a.AssessorContact = p.AssessorContact; a.Participants = p.Participants;
         }
 
         static OrganizationProfile NormalizeProfile(OrganizationProfile p)
@@ -148,8 +153,16 @@ namespace MaturityApp
                 Organization = p.Organization ?? "", OrganizationShort = p.OrganizationShort ?? "",
                 OrganizationAddress = p.OrganizationAddress ?? "", City = p.City ?? "",
                 Assessor = p.Assessor ?? "", AssessorPosition = p.AssessorPosition ?? "",
-                ApproverName = p.ApproverName ?? "", ApproverPosition = p.ApproverPosition ?? ""
+                ApproverName = p.ApproverName ?? "", ApproverPosition = p.ApproverPosition ?? "",
+                AssessorOrganization = p.AssessorOrganization ?? "", AssessorContact = p.AssessorContact ?? "",
+                Participants = NormalizePeople(p.Participants)
             };
+        }
+        static ReportPerson[] NormalizePeople(ReportPerson[] people)
+        {
+            Assessment check = Assessment.Create(); check.Participants = people ?? new ReportPerson[0];
+            ReportFacts.Normalize(check); // same role and size checks as a project
+            return check.Participants.Select(x => new ReportPerson { Role = x.Role, Name = x.Name, Position = x.Position, Organization = x.Organization, Contact = x.Contact }).ToArray();
         }
 
         public static void ExportBundle(Assessment a, string path, bool includeWord, bool includeExcel)
