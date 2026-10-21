@@ -9,7 +9,8 @@ using System.Web.Script.Serialization;
 namespace MaturityApp
 {
     public class PassportComponent { public string Kind = "", Note = ""; public int Count = 1; }
-    public class PassportConnection { public string System = "", Method = "", Channel = "", Note = ""; }
+    public class PassportConnection { public string System = "", Method = "", Channel = "", Via = "", Note = ""; } // Via: boundary device, e.g. firewall or crypto gateway
+    public class PassportSegment { public string Name = "", Purpose = "", Note = ""; }
     public class PassportTool { public string Class = "other", Product = "", Note = ""; }
 
     // Technical description of the assessed object. Facts are separate from maturity grades
@@ -22,6 +23,8 @@ namespace MaturityApp
         public PassportConnection[] Connections = new PassportConnection[0];
         public bool NoConnections;
         public PassportTool[] Tools = new PassportTool[0];
+        public PassportSegment[] Segments = new PassportSegment[0];
+        public bool? WirelessIsolated = null; // Wi-Fi separated from the object's segments; meaningful only when Wireless == true
         public bool? Domain = null, Internet = null, Wireless = null, Mobile = null,
             RemoteAdministration = null, OwnDevelopment = null, ArtificialIntelligence = null;
         // Version 1 (1.4-1.6) fields, read once and converted by SystemPassports.Validate.
@@ -41,6 +44,8 @@ namespace MaturityApp
             "Межсетевой экран", "Точка доступа Wi-Fi", "Мобильное устройство", "Принтер / МФУ", "АРМ оператора",
             "Инженерная станция", "ПЛК / контроллер", "Сетевое оборудование АСУ ТП"
         };
+        public static readonly string[] ViaSuggestions = { "Межсетевой экран", "Криптошлюз (VPN-шлюз)", "Маршрутизатор", "Однонаправленный шлюз", "Напрямую" };
+        public static readonly string[] SegmentSuggestions = { "Сегмент пользователей", "Серверный сегмент", "Сегмент управления", "Технологический сегмент", "ДМЗ", "Гостевой Wi-Fi" };
         public static readonly CatalogItem[] Methods = {
             new CatalogItem("", "Не уточнено"), new CatalogItem("browser", "Через браузер"), new CatalogItem("client", "Клиентская программа"),
             new CatalogItem("exchange", "Автоматический обмен данными"), new CatalogItem("other", "Иной способ")
@@ -77,7 +82,10 @@ namespace MaturityApp
             p.Components = (p.Components ?? new PassportComponent[0]).Where(x => x != null).ToArray();
             p.Connections = (p.Connections ?? new PassportConnection[0]).Where(x => x != null).ToArray();
             p.Tools = (p.Tools ?? new PassportTool[0]).Where(x => x != null).ToArray();
-            if (p.Components.Length > MaximumRows || p.Connections.Length > MaximumRows || p.Tools.Length > MaximumRows) throw new InvalidDataException("Слишком много строк в описании объекта.");
+            p.Segments = (p.Segments ?? new PassportSegment[0]).Where(x => x != null).ToArray();
+            if (p.Components.Length > MaximumRows || p.Connections.Length > MaximumRows || p.Tools.Length > MaximumRows || p.Segments.Length > MaximumRows) throw new InvalidDataException("Слишком много строк в описании объекта.");
+            foreach (PassportSegment g in p.Segments) { g.Name = Text(g.Name); g.Purpose = Text(g.Purpose); g.Note = Text(g.Note); }
+            if (p.Wireless != true) p.WirelessIsolated = null; // isolation of absent or unknown Wi-Fi is not a fact
             foreach (PassportComponent c in p.Components)
             {
                 if (c.Count < 0 || c.Count > 100000) throw new InvalidDataException("Количество в составе объекта должно быть от 0 до 100000.");
@@ -88,7 +96,7 @@ namespace MaturityApp
                 c.Method = c.Method ?? ""; c.Channel = c.Channel ?? "";
                 if (!Methods.Any(x => x.Key == c.Method)) throw new InvalidDataException("Неизвестный способ взаимодействия.");
                 if (!Channels.Any(x => x.Key == c.Channel)) throw new InvalidDataException("Неизвестный канал взаимодействия.");
-                c.System = Text(c.System); c.Note = Text(c.Note);
+                c.System = Text(c.System); c.Via = Text(c.Via); c.Note = Text(c.Note);
             }
             foreach (PassportTool t in p.Tools)
             {
@@ -162,6 +170,7 @@ namespace MaturityApp
             List<string> parts = new List<string>();
             if (c.Method.Length > 0) parts.Add(Label(Methods, c.Method));
             if (c.Channel.Length > 0) parts.Add(Label(Channels, c.Channel));
+            if (c.Via.Length > 0) parts.Add("через: " + c.Via);
             return (c.System.Length > 0 ? c.System : "Система не указана") + (parts.Count > 0 ? " (" + String.Join(", ", parts) + ")" : "") + (c.Note.Length > 0 ? " — " + c.Note : "");
         }
         public static string ToolText(PassportTool t) { return Label(ToolClasses, t.Class) + ": " + (t.Product.Length > 0 ? t.Product : "не указано") + (t.Note.Length > 0 ? " (" + t.Note + ")" : ""); }
@@ -172,7 +181,8 @@ namespace MaturityApp
             SystemPassport q = Snapshot(p);
             string composition = q.Components.Length == 0 ? "состав не указан" : String.Join("; ", q.Components.Select(c => (c.Kind.Length > 0 ? c.Kind : "Компонент") + " — " + c.Count.ToString(CultureInfo.InvariantCulture)));
             string links = q.NoConnections ? "внешних взаимодействий нет" : q.Connections.Length == 0 ? "внешние взаимодействия не указаны" : String.Join("; ", q.Connections.Select(ConnectionText));
-            return "Состав: " + composition + ". Внешние взаимодействия: " + links + ".";
+            string segments = q.Segments.Length == 0 ? "" : " Сегменты: " + String.Join("; ", q.Segments.Select(g => g.Name.Length > 0 ? g.Name : "без названия")) + ".";
+            return "Состав: " + composition + ". Внешние взаимодействия: " + links + "." + segments;
         }
         public static SystemComponent[] Components(SystemPassport p)
         {
@@ -191,6 +201,7 @@ namespace MaturityApp
             if (!q.Domain.HasValue) fields.Add("Домен");
             if (!q.Internet.HasValue) fields.Add("Доступ в интернет");
             if (!q.Wireless.HasValue) fields.Add("Беспроводной доступ");
+            if (q.Wireless == true && !q.WirelessIsolated.HasValue) fields.Add("Отделение Wi-Fi от сегментов объекта");
             if (!q.Mobile.HasValue) fields.Add("Мобильные устройства");
             if (!q.RemoteAdministration.HasValue) fields.Add("Удалённый доступ");
             if (!q.OwnDevelopment.HasValue) fields.Add("Собственная разработка ПО");

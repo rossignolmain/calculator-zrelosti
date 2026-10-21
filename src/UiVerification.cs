@@ -267,6 +267,16 @@ namespace MaturityApp
             Click(Labeled(window, "+ Добавить средство защиты")); Layout(window);
             Tagged<ComboBox>(window, "Средство").Text = "Любой продукт";
             Assert(a.Passport.Tools.Length == 1 && a.Passport.Tools[0].Product == "Любой продукт", "A free-text security product was not accepted.");
+            Tree((DependencyObject)window.Content).OfType<ComboBox>().Where(x => (x.Tag as string) == "Через что").ToList().ForEach(x => x.Text = "Межсетевой экран");
+            Assert(a.Passport.Connections.All(c => c.Via == "Межсетевой экран"), "The boundary device of a connection was not stored.");
+            Click(Labeled(window, "+ Добавить сегмент")); Layout(window);
+            Tagged<ComboBox>(window, "Сегмент").Text = "Технологический сегмент"; Tagged<TextBox>(window, "Назначение сегмента").Text = "SCADA";
+            Assert(a.Passport.Segments.Length == 1 && a.Passport.Segments[0].Name == "Технологический сегмент" && a.Passport.Segments[0].Purpose == "SCADA", "A network segment was not stored.");
+            ComboBox wifi = Tagged<ComboBox>(window, "Беспроводной доступ (Wi-Fi)"), isolation = Tagged<ComboBox>(window, "Wi-Fi отделён от сегментов объекта");
+            Assert(!isolation.IsEnabled, "Wi-Fi isolation is editable while Wi-Fi is not confirmed.");
+            wifi.SelectedIndex = 2; Assert(isolation.IsEnabled, "Wi-Fi isolation did not unlock for confirmed Wi-Fi."); isolation.SelectedIndex = 1;
+            Assert(a.Passport.WirelessIsolated == false, "Wi-Fi isolation was not stored.");
+            wifi.SelectedIndex = 1; Assert(!a.Passport.WirelessIsolated.HasValue && !isolation.IsEnabled, "Isolation stayed set after Wi-Fi was marked absent.");
             Click(Labeled(window, "Отметить первые пять как неприменяемые"));
             Assert(a.Passport.Wireless == false && a.Passport.ArtificialIntelligence == false && !a.Passport.Domain.HasValue && !a.Passport.Internet.HasValue, "Marking technologies changed the wrong facts.");
             Assert(a.Directions[0].Answers[0] == 0 && !a.Directions[1].Included && a.Directions[0].Target == 4, "The object page changed maturity data.");
@@ -284,6 +294,13 @@ namespace MaturityApp
             Page(window, "quick");
             ComboBox category = Tree((DependencyObject)window.Content).OfType<ComboBox>().Single(x => x.Items.Count == 4 && x.Items[0] is string);
             Assert(!category.IsEnabled && category.SelectedIndex == 2, "The category field is editable although object types define it.");
+            Page(window, "object");
+            Assert(!Tree((DependencyObject)window.Content).OfType<CheckBox>().Any(c => (c.Tag as string ?? "").StartsWith("pd:")), "Personal data fields are shown for a ГИС.");
+            Tagged<ComboBox>(window, "Тип объекта защиты").SelectedIndex = 1; Layout(window); // ИСПДн
+            Tagged<CheckBox>(window, "pd:special").IsChecked = true; Tagged<ComboBox>(window, "Объём ПДн").SelectedIndex = 2;
+            Assert(a.Objects[0].Kind == "ispdn" && a.Objects[0].PdCategories.SequenceEqual(new[] { "special" }) && a.Objects[0].Volume == "gt100k", "Personal data details were not stored for an ИСПДн.");
+            Tagged<ComboBox>(window, "Тип объекта защиты").SelectedIndex = 0; Layout(window);
+            Assert(a.Objects[0].PdCategories.Length == 0 && a.Objects[0].Volume == "" && Store.Parse(Store.Serialize(a)) != null, "Switching away from ИСПДн left personal data details behind.");
         }
         static void HeaderAndTabs()
         {

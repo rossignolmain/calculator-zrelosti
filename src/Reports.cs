@@ -403,9 +403,17 @@ namespace MaturityApp
             else if (p.Connections.Length == 0) b.Append(P("Не указаны.", "Warning"));
             else
             {
-                b.Append(TableStart(new int[] { 3000, 2000, 2200, 2300 }));
-                b.Append(TableRow(new string[] { "Система / сеть", "Способ", "Канал", "Примечание" }, true));
-                foreach (PassportConnection c in p.Connections) b.Append(TableRow(new string[] { Empty(c.System), SystemPassports.Label(SystemPassports.Methods, c.Method), SystemPassports.Label(SystemPassports.Channels, c.Channel), c.Note }, false));
+                b.Append(TableStart(new int[] { 2500, 1700, 1800, 1700, 1800 }));
+                b.Append(TableRow(new string[] { "Система / сеть", "Способ", "Канал", "Через что", "Примечание" }, true));
+                foreach (PassportConnection c in p.Connections) b.Append(TableRow(new string[] { Empty(c.System), SystemPassports.Label(SystemPassports.Methods, c.Method), SystemPassports.Label(SystemPassports.Channels, c.Channel), c.Via, c.Note }, false));
+                b.Append("</w:tbl>");
+            }
+            if (p.Segments.Length > 0)
+            {
+                b.Append(P("Сегменты сети", "Heading3"));
+                b.Append(TableStart(new int[] { 2700, 3400, 3400 }));
+                b.Append(TableRow(new string[] { "Сегмент", "Назначение", "Примечание" }, true));
+                foreach (PassportSegment g in p.Segments) b.Append(TableRow(new string[] { Empty(g.Name), g.Purpose, g.Note }, false));
                 b.Append("</w:tbl>");
             }
             b.Append(P("Средства защиты информации", "Heading3"));
@@ -429,7 +437,7 @@ namespace MaturityApp
 
         private static KeyValuePair<string, string>[] PassportFacts(SystemPassport p)
         {
-            return new KeyValuePair<string, string>[] {
+            List<KeyValuePair<string, string>> facts = new List<KeyValuePair<string, string>> {
                 new KeyValuePair<string, string>("Доменная инфраструктура", SystemPassports.BooleanText(p.Domain)),
                 new KeyValuePair<string, string>("Доступ в интернет", SystemPassports.BooleanText(p.Internet)),
                 new KeyValuePair<string, string>("Беспроводной доступ (Wi-Fi)", SystemPassports.BooleanText(p.Wireless)),
@@ -438,6 +446,8 @@ namespace MaturityApp
                 new KeyValuePair<string, string>("Собственная разработка ПО", SystemPassports.BooleanText(p.OwnDevelopment)),
                 new KeyValuePair<string, string>("Искусственный интеллект", SystemPassports.BooleanText(p.ArtificialIntelligence))
             };
+            if (p.Wireless == true) facts.Insert(3, new KeyValuePair<string, string>("Wi-Fi отделён от сегментов объекта", SystemPassports.BooleanText(p.WirelessIsolated)));
+            return facts.ToArray();
         }
 
         private static string PassportSheet(Assessment a)
@@ -454,9 +464,14 @@ namespace MaturityApp
             Action<string, string[]> table = (title, head) => { row++; rows.Append(Row(row, T("A" + row, title, 4), 26)); merges.Add("A" + row + ":D" + row); row++; rows.Append(Row(row, HeaderCells(head, row), 30)); row++; };
             table("СОСТАВ", new[] { "Компонент", "Количество", "Примечание", "" });
             foreach (PassportComponent c in p.Components) { rows.Append(Row(row, T("A" + row, c.Kind, 0) + N("B" + row, c.Count, 3) + T("C" + row, c.Note, 0), 32)); merges.Add("C" + row + ":D" + row); row++; }
-            table("ВНЕШНИЕ ВЗАИМОДЕЙСТВИЯ", new[] { "Система / сеть", "Способ", "Канал", "Примечание" });
+            table("ВНЕШНИЕ ВЗАИМОДЕЙСТВИЯ", new[] { "Система / сеть", "Способ", "Канал", "Через что / примечание" });
             if (p.NoConnections) { rows.Append(Row(row, T("A" + row, "Внешних взаимодействий нет", 0), 26)); row++; }
-            foreach (PassportConnection c in p.Connections) { rows.Append(Row(row, T("A" + row, c.System, 0) + T("B" + row, SystemPassports.Label(SystemPassports.Methods, c.Method), 0) + T("C" + row, SystemPassports.Label(SystemPassports.Channels, c.Channel), 0) + T("D" + row, c.Note, 0), 32)); row++; }
+            foreach (PassportConnection c in p.Connections) { rows.Append(Row(row, T("A" + row, c.System, 0) + T("B" + row, SystemPassports.Label(SystemPassports.Methods, c.Method), 0) + T("C" + row, SystemPassports.Label(SystemPassports.Channels, c.Channel), 0) + T("D" + row, (c.Via.Length > 0 ? "Через: " + c.Via + (c.Note.Length > 0 ? "; " : "") : "") + c.Note, 0), 32)); row++; }
+            if (p.Segments.Length > 0)
+            {
+                table("СЕГМЕНТЫ СЕТИ", new[] { "Сегмент", "Назначение", "Примечание", "" });
+                foreach (PassportSegment g in p.Segments) { rows.Append(Row(row, T("A" + row, g.Name, 0) + T("B" + row, g.Purpose, 0) + T("C" + row, g.Note, 0), 32)); merges.Add("C" + row + ":D" + row); row++; }
+            }
             table("СРЕДСТВА ЗАЩИТЫ ИНФОРМАЦИИ", new[] { "Класс", "Средство", "Примечание", "" });
             foreach (PassportTool t in p.Tools) { rows.Append(Row(row, T("A" + row, SystemPassports.Label(SystemPassports.ToolClasses, t.Class), 0) + T("B" + row, t.Product, 0) + T("C" + row, t.Note, 0), 32)); merges.Add("C" + row + ":D" + row); row++; }
             row++;

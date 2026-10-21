@@ -33,6 +33,7 @@ namespace MaturityApp
             Case("legacy .arm.json files load; foreign files do not", LegacyTemplates);
             Case("object type sets the strictest recommended target and requirements (п. 11)", ObjectTargets);
             Case("plan rows fall back to plan defaults", PlanFallback);
+            Case("segments, boundary device, Wi-Fi isolation and personal data details are stored and validated", DetailedFields);
             if (errors.Count > 0) throw new InvalidOperationException("System passport verification failed: " + String.Join("; ", errors));
         }
 
@@ -121,7 +122,7 @@ namespace MaturityApp
         {
             string[] empty = SystemPassports.UnknownFields(SystemPassports.CreateEmpty());
             Check(empty.Contains("Состав объекта") && empty.Any(x => x.StartsWith("Внешние взаимодействия")) && empty.Contains("Средства защиты информации") && empty.Contains("Удалённый доступ"), "Empty description does not list what is missing.");
-            SystemPassport p = Filled(); p.Mobile = p.RemoteAdministration = p.OwnDevelopment = p.ArtificialIntelligence = false; p.Internet = false;
+            SystemPassport p = Filled(); p.Mobile = p.RemoteAdministration = p.OwnDevelopment = p.ArtificialIntelligence = false; p.Internet = false; p.WirelessIsolated = true;
             Check(SystemPassports.UnknownFields(p).Length == 0, "A complete description still reports unknown fields: " + String.Join("; ", SystemPassports.UnknownFields(p)));
             SystemPassport none = SystemPassports.CreateEmpty(); none.NoConnections = true;
             Check(!SystemPassports.UnknownFields(none).Any(x => x.StartsWith("Внешние взаимодействия")), "\"No connections\" is still reported as unknown.");
@@ -167,6 +168,27 @@ namespace MaturityApp
             Reject(() => { Assessment bad = Assessment.Create(); bad.Objects = new[] { new ProtectionObject { Kind = "ufo" } }; Store.Parse(Store.Serialize(bad)); }, "An unknown object type was accepted.");
             Assessment saved = Store.Parse(Store.Serialize(a));
             Check(saved.Objects.Length == 2 && saved.Objects[1].Kind == "ispdn" && saved.Objects[1].Level == 2, "Object types did not survive saving.");
+        }
+        static void DetailedFields()
+        {
+            Assessment a = Assessment.Create(); a.Passport = Filled();
+            a.Passport.Segments = new[] { new PassportSegment { Name = "Технологический сегмент", Purpose = "SCADA, ПЛК", Note = "VLAN 20" } };
+            a.Passport.Connections[0].Via = "Межсетевой экран"; a.Passport.Wireless = true; a.Passport.WirelessIsolated = true;
+            a.Objects = new[] { new ProtectionObject { Kind = "ispdn", Level = 2, PdCategories = new[] { "other", "special" }, Subjects = "both", Volume = "gt100k" } };
+            Assessment back = Store.Parse(Store.Serialize(a));
+            Check(back.Passport.Segments.Length == 1 && back.Passport.Segments[0].Note == "VLAN 20" && back.Passport.Connections[0].Via == "Межсетевой экран" && back.Passport.WirelessIsolated == true, "Segments, boundary device or Wi-Fi isolation were lost.");
+            Check(back.Objects[0].PdCategories.SequenceEqual(new[] { "special", "other" }) && back.Objects[0].Subjects == "both" && back.Objects[0].Volume == "gt100k", "Personal data details were lost or not ordered.");
+            string text = ObjectCatalog.Text(back.Objects[0]);
+            Check(text.Contains("специальные, иные") && text.Contains("100 000"), "Personal data details are missing from the object text: " + text);
+            Check(SystemPassports.Description(back.Passport).Contains("через: Межсетевой экран") && SystemPassports.Description(back.Passport).Contains("Технологический сегмент"), "Description misses the boundary device or segments.");
+            SystemPassport noWifi = Filled(); noWifi.Wireless = false; noWifi.WirelessIsolated = true; SystemPassports.Validate(noWifi);
+            Check(!noWifi.WirelessIsolated.HasValue, "Isolation of absent Wi-Fi was kept as a fact.");
+            SystemPassport unknownIsolation = Filled(); unknownIsolation.Wireless = true;
+            Check(SystemPassports.UnknownFields(unknownIsolation).Contains("Отделение Wi-Fi от сегментов объекта"), "Unknown Wi-Fi isolation is not reported.");
+            Reject(() => { Assessment bad = Assessment.Create(); bad.Objects = new[] { new ProtectionObject { Kind = "gis", Level = 3, Volume = "gt100k" } }; Store.Parse(Store.Serialize(bad)); }, "Personal data details were accepted for a non-ИСПДн object.");
+            Reject(() => { Assessment bad = Assessment.Create(); bad.Objects = new[] { new ProtectionObject { Kind = "ispdn", PdCategories = new[] { "secret" } } }; Store.Parse(Store.Serialize(bad)); }, "An unknown personal data category was accepted.");
+            Assessment template = Assessment.Create(); AnswerTemplates.Apply(template, AnswerTemplates.Create(back, "Т"));
+            Check(template.Objects[0].Volume == "gt100k" && template.Passport.Segments.Length == 1, "A template lost personal data details or segments.");
         }
         static void PlanFallback()
         {

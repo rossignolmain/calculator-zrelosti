@@ -226,7 +226,7 @@ namespace MaturityApp
                 Format = TemplateFormat, Name = name ?? "", Category = a.Category,
                 Author = Environment.UserName ?? "", Created = DateTime.Now.ToString("yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture),
                 Directions = a.Directions.Select(d => new TemplateDirection { Id = d.Id, Included = d.Included, Target = d.Target, Answers = (double?[])d.Answers.Clone() }).ToArray(),
-                Objects = a.Objects.Select(o => new ProtectionObject { Kind = o.Kind, Level = o.Level }).ToArray() // names and acts belong to the object, not the template
+                Objects = a.Objects.Select(o => new ProtectionObject { Kind = o.Kind, Level = o.Level, PdCategories = (string[])o.PdCategories.Clone(), Subjects = o.Subjects, Volume = o.Volume }).ToArray() // names and acts belong to the object, not the template
             };
             if ((parts & TemplateParts.Passport) != 0 && a.Passport != null) t.Passport = SystemPassports.Snapshot(a.Passport);
             if ((parts & TemplateParts.Practice) != 0)

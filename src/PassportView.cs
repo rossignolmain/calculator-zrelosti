@@ -13,7 +13,7 @@ namespace MaturityApp
     public partial class MainWindow
     {
         TextBlock passportSummary, passportUnknown, objectTargetText;
-        StackPanel objectRows, componentRows, connectionRows, toolRows;
+        StackPanel objectRows, componentRows, connectionRows, toolRows, segmentRows;
         CheckBox noConnectionsBox;
         SystemPassport passportDraft;
 
@@ -59,6 +59,12 @@ namespace MaturityApp
             connections.Children.Add(AddRowButton("+ Добавить взаимодействие", () => { Passport.NoConnections = false; Passport.Connections = Passport.Connections.Concat(new[] { new PassportConnection() }).ToArray(); building = true; noConnectionsBox.IsChecked = false; building = false; PassportChanged(); RebuildConnectionRows(); }));
             body.Children.Add(Card(connections));
 
+            StackPanel segments = new StackPanel();
+            segments.Children.Add(SectionTitle("Сегменты сети", "Необязательно. Например: сегмент пользователей, серверный, технологический, ДМЗ."));
+            segmentRows = new StackPanel(); segments.Children.Add(segmentRows); RebuildSegmentRows();
+            segments.Children.Add(AddRowButton("+ Добавить сегмент", () => { Passport.Segments = Passport.Segments.Concat(new[] { new PassportSegment() }).ToArray(); PassportChanged(); RebuildSegmentRows(); }));
+            body.Children.Add(Card(segments));
+
             StackPanel tools = new StackPanel();
             tools.Children.Add(SectionTitle("Средства защиты информации", "Фактически применяемые средства. Класс выбирается из списка, название — из подсказок или вводится вручную."));
             toolRows = new StackPanel(); tools.Children.Add(toolRows); RebuildToolRows();
@@ -76,6 +82,9 @@ namespace MaturityApp
             choices.Add(PassportBoolean(flags, index++, "Искусственный интеллект", Passport.ArtificialIntelligence, v => Passport.ArtificialIntelligence = v));
             choices.Add(PassportBoolean(flags, index++, "Доменная инфраструктура", Passport.Domain, v => Passport.Domain = v));
             PassportBoolean(flags, index++, "Доступ в интернет", Passport.Internet, v => Passport.Internet = v);
+            ComboBox isolated = PassportBoolean(flags, index++, "Wi-Fi отделён от сегментов объекта", Passport.WirelessIsolated, v => Passport.WirelessIsolated = v);
+            Action syncIsolation = () => { isolated.IsEnabled = Passport.Wireless == true; isolated.ToolTip = isolated.IsEnabled ? null : "Уточняется, если беспроводной доступ применяется."; if (!isolated.IsEnabled && isolated.SelectedIndex != 0) { building = true; isolated.SelectedIndex = 0; building = false; Passport.WirelessIsolated = null; } };
+            choices[0].SelectionChanged += (s, e) => syncIsolation(); syncIsolation();
             technology.Children.Add(flags);
             Button none = AddRowButton("Отметить первые пять как неприменяемые", () => {
                 Passport.Wireless = Passport.Mobile = Passport.RemoteAdministration = Passport.OwnDevelopment = Passport.ArtificialIntelligence = false;
@@ -84,7 +93,7 @@ namespace MaturityApp
             none.ToolTip = "Wi-Fi, мобильные устройства, удалённый доступ, собственная разработка и ИИ — «Нет». Домен и интернет не меняются.";
             technology.Children.Add(none);
             Grid notes = PassportGrid(1); notes.Margin = new Thickness(0, 10, 0, 0);
-            PassportText(notes, 0, "Особенности объекта (сегменты, площадки, иное) — необязательно", Passport.Notes, value => { Passport.Notes = value; PassportChanged(); });
+            PassportText(notes, 0, "Особенности объекта (площадки, режим работы, иное) — необязательно", Passport.Notes, value => { Passport.Notes = value; PassportChanged(); });
             technology.Children.Add(notes);
             body.Children.Add(Card(technology));
 
@@ -158,15 +167,60 @@ namespace MaturityApp
                     level.IsEnabled = k.Levels.Length > 0; level.SelectedIndex = Math.Min(o.Level, k.Levels.Length);
                 };
                 building = true; fillLevels(); building = false;
-                kind.SelectionChanged += (s, e) => { if (building || kind.SelectedItem == null) return; o.Kind = (string)((ComboBoxItem)kind.SelectedItem).Tag; o.Level = 0; building = true; fillLevels(); building = false; ObjectsChanged(); };
+                kind.SelectionChanged += (s, e) => {
+                    if (building || kind.SelectedItem == null) return;
+                    o.Kind = (string)((ComboBoxItem)kind.SelectedItem).Tag; o.Level = 0;
+                    if (o.Kind != "ispdn") { o.PdCategories = new string[0]; o.Subjects = o.Volume = ""; }
+                    ObjectsChanged(); RebuildObjectRows(); // the personal data block depends on the type
+                };
                 level.SelectionChanged += (s, e) => { if (building || level.SelectedIndex < 0) return; o.Level = level.SelectedIndex; ObjectsChanged(); };
                 Put(row, kind, 0); Put(row, level, 1);
                 TextBox name = new TextBox { Text = o.Name, Height = 30, Padding = new Thickness(6, 4, 6, 4), ToolTip = "Наименование (если систем несколько)" }; name.TextChanged += (s, e) => { o.Name = name.Text; Changed(); }; Put(row, name, 2);
                 TextBox doc = new TextBox { Text = o.Document, Height = 30, Padding = new Thickness(6, 4, 6, 4), ToolTip = "Акт классификации / категорирования: номер и дата" }; doc.TextChanged += (s, e) => { o.Document = doc.Text; Changed(); }; Put(row, doc, 3);
                 Put(row, RemoveButton(() => { assessment.Objects = assessment.Objects.Where(x => !Object.ReferenceEquals(x, o)).ToArray(); ObjectsChanged(); RebuildObjectRows(); }), 4);
                 objectRows.Children.Add(row);
+                if (o.Kind == "ispdn") objectRows.Children.Add(PersonalDataRow(o));
             }
             objectRows.Children.Insert(0, HeaderRow(RowGrid(2.2, 1.2, 1.6, 1.6, -30), "Тип", "Класс / категория", "Наименование (необязательно)", "Акт классификации / категорирования"));
+        }
+        // ПП РФ № 1119: categories of personal data, whose data and how many subjects.
+        UIElement PersonalDataRow(ProtectionObject o)
+        {
+            WrapPanel panel = new WrapPanel { Margin = new Thickness(12, 0, 0, 10) };
+            panel.Children.Add(new TextBlock { Text = "Категории ПДн:", Foreground = Theme.Muted, FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) });
+            foreach (CatalogItem item in ObjectCatalog.PdCategories)
+            {
+                CatalogItem current = item;
+                CheckBox box = new CheckBox { Content = item.Text, IsChecked = o.PdCategories.Contains(item.Key), Margin = new Thickness(0, 0, 12, 0), VerticalAlignment = VerticalAlignment.Center, Tag = "pd:" + item.Key };
+                box.Checked += (s, e) => { o.PdCategories = ObjectCatalog.PdCategories.Where(x => x.Key == current.Key || o.PdCategories.Contains(x.Key)).Select(x => x.Key).ToArray(); Changed(); RefreshPassportPreview(); };
+                box.Unchecked += (s, e) => { o.PdCategories = o.PdCategories.Where(x => x != current.Key).ToArray(); Changed(); RefreshPassportPreview(); };
+                panel.Children.Add(box);
+            }
+            ComboBox subjects = RowChoiceRaw(ObjectCatalog.Subjects, o.Subjects, v => { o.Subjects = v; Changed(); RefreshPassportPreview(); }); subjects.Width = 210; subjects.Tag = "Субъекты ПДн"; subjects.Margin = new Thickness(8, 0, 8, 0); panel.Children.Add(subjects);
+            ComboBox volume = RowChoiceRaw(ObjectCatalog.Volumes, o.Volume, v => { o.Volume = v; Changed(); RefreshPassportPreview(); }); volume.Width = 210; volume.Tag = "Объём ПДн"; panel.Children.Add(volume);
+            return panel;
+        }
+        ComboBox RowChoiceRaw(CatalogItem[] items, string value, Action<string> set)
+        {
+            ComboBox c = new ComboBox { Height = 30 };
+            foreach (CatalogItem item in items) c.Items.Add(new ComboBoxItem { Content = item.Text, Tag = item.Key });
+            c.SelectedIndex = Math.Max(0, Array.FindIndex(items, x => x.Key == (value ?? "")));
+            c.SelectionChanged += (s, e) => { if (!building && c.SelectedItem != null) set((string)((ComboBoxItem)c.SelectedItem).Tag); }; return c;
+        }
+        void RebuildSegmentRows()
+        {
+            if (segmentRows == null) return; segmentRows.Children.Clear();
+            if (Passport.Segments.Length == 0) { segmentRows.Children.Add(Theme.Text("Не указаны.", 11, Theme.Muted)); return; }
+            segmentRows.Children.Add(HeaderRow(RowGrid(2, 2.4, 2.4, -30), "Сегмент", "Назначение (что в нём)", "Примечание (изоляция, VLAN, МЭ)"));
+            foreach (PassportSegment item in Passport.Segments)
+            {
+                PassportSegment g = item; Grid row = RowGrid(2, 2.4, 2.4, -30);
+                Put(row, RowEditable(g.Name, SystemPassports.SegmentSuggestions, "Сегмент", v => g.Name = v), 0);
+                Put(row, RowText(g.Purpose, "Назначение сегмента", v => g.Purpose = v), 1);
+                Put(row, RowText(g.Note, "Примечание к сегменту", v => g.Note = v), 2);
+                Put(row, RemoveButton(() => { Passport.Segments = Passport.Segments.Where(x => !Object.ReferenceEquals(x, g)).ToArray(); PassportChanged(); RebuildSegmentRows(); }), 3);
+                segmentRows.Children.Add(row);
+            }
         }
         static Grid HeaderRow(Grid g, params string[] titles)
         {
@@ -209,15 +263,16 @@ namespace MaturityApp
             if (connectionRows == null) return; connectionRows.Children.Clear();
             if (Passport.NoConnections) return;
             if (Passport.Connections.Length == 0) { connectionRows.Children.Add(Theme.Text("Не указаны. Добавьте взаимодействие или отметьте, что их нет.", 11, Theme.Muted)); return; }
-            connectionRows.Children.Add(HeaderRow(RowGrid(2.4, 1.6, 1.6, 2, -30), "Система или сеть", "Способ", "Канал", "Примечание"));
+            connectionRows.Children.Add(HeaderRow(RowGrid(2.2, 1.5, 1.5, 1.6, 1.7, -30), "Система или сеть", "Способ", "Канал", "Через что", "Примечание"));
             foreach (PassportConnection item in Passport.Connections)
             {
-                PassportConnection c = item; Grid row = RowGrid(2.4, 1.6, 1.6, 2, -30);
+                PassportConnection c = item; Grid row = RowGrid(2.2, 1.5, 1.5, 1.6, 1.7, -30);
                 Put(row, RowText(c.System, "Система или сеть", v => c.System = v), 0);
                 Put(row, RowChoice(SystemPassports.Methods, c.Method, v => c.Method = v), 1);
                 Put(row, RowChoice(SystemPassports.Channels, c.Channel, v => { c.Channel = v; if (v == "internet") Passport.Internet = true; }), 2);
-                Put(row, RowText(c.Note, "Примечание", v => c.Note = v), 3);
-                Put(row, RemoveButton(() => { Passport.Connections = Passport.Connections.Where(x => !Object.ReferenceEquals(x, c)).ToArray(); PassportChanged(); RebuildConnectionRows(); }), 4);
+                Put(row, RowEditable(c.Via, SystemPassports.ViaSuggestions, "Через что", v => c.Via = v), 3);
+                Put(row, RowText(c.Note, "Примечание", v => c.Note = v), 4);
+                Put(row, RemoveButton(() => { Passport.Connections = Passport.Connections.Where(x => !Object.ReferenceEquals(x, c)).ToArray(); PassportChanged(); RebuildConnectionRows(); }), 5);
                 connectionRows.Children.Add(row);
             }
         }

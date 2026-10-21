@@ -58,6 +58,9 @@ namespace MaturityApp
     {
         public string Kind = "", Name = "", Document = "";
         public int Level; // класс ГИС 1-3, уровень защищённости ПДн 1-4, категория значимости 1-3; 0 — не установлен
+        // ИСПДн only (ПП РФ от 01.11.2012 № 1119): categories, whose data, how many subjects. Empty = not specified.
+        public string[] PdCategories = new string[0];
+        public string Subjects = "", Volume = "";
     }
 
     public class ObjectKind
@@ -95,7 +98,28 @@ namespace MaturityApp
         {
             ObjectKind k = Find(o.Kind); if (k == null) return o.Kind;
             string level = o.Level > 0 && o.Level <= k.Levels.Length ? ", " + k.Levels[o.Level - 1] : k.Levels.Length > 0 ? ", " + k.LevelLabel.ToLower() + " не установлен" : "";
-            return (o.Name.Length > 0 ? o.Name + " — " : "") + k.Text + level + (o.Document.Length > 0 ? " (" + o.Document + ")" : "");
+            return (o.Name.Length > 0 ? o.Name + " — " : "") + k.Text + level + (o.Document.Length > 0 ? " (" + o.Document + ")" : "") + PdText(o);
+        }
+
+        public static readonly CatalogItem[] PdCategories = {
+            new CatalogItem("special", "специальные"), new CatalogItem("biometric", "биометрические"),
+            new CatalogItem("public", "общедоступные"), new CatalogItem("other", "иные")
+        };
+        public static readonly CatalogItem[] Subjects = {
+            new CatalogItem("", "Субъекты ПДн: не указано"), new CatalogItem("staff", "Работники оператора"),
+            new CatalogItem("nonstaff", "Не являющиеся работниками"), new CatalogItem("both", "Работники и иные лица")
+        };
+        public static readonly CatalogItem[] Volumes = {
+            new CatalogItem("", "Число субъектов: не указано"), new CatalogItem("lt100k", "Менее 100 000 субъектов"), new CatalogItem("gt100k", "100 000 субъектов и более")
+        };
+        public static string PdText(ProtectionObject o)
+        {
+            if (o.Kind != "ispdn") return "";
+            List<string> parts = new List<string>();
+            if (o.PdCategories.Length > 0) parts.Add("категории ПДн: " + String.Join(", ", ReportCatalog.Texts(PdCategories, o.PdCategories)));
+            if (o.Subjects.Length > 0) parts.Add("субъекты: " + ReportCatalog.Text(Subjects, o.Subjects).ToLower());
+            if (o.Volume.Length > 0) parts.Add(ReportCatalog.Text(Volumes, o.Volume).ToLower());
+            return parts.Count == 0 ? "" : "; " + String.Join("; ", parts);
         }
         // Category (= minimum target) follows the strictest object; matching requirements are ticked.
         // Unticking a requirement afterwards is the user's decision and is kept until objects change.
@@ -202,6 +226,10 @@ namespace MaturityApp
                 if (k == null) throw new InvalidDataException("Неизвестный тип объекта защиты.");
                 if (o.Level < 0 || o.Level > k.Levels.Length) throw new InvalidDataException("Некорректный класс или категория объекта защиты.");
                 o.Name = o.Name ?? ""; o.Document = o.Document ?? "";
+                o.Subjects = o.Subjects ?? ""; o.Volume = o.Volume ?? "";
+                if (!ObjectCatalog.Subjects.Any(x => x.Key == o.Subjects) || !ObjectCatalog.Volumes.Any(x => x.Key == o.Volume)) throw new InvalidDataException("Некорректные сведения о субъектах персональных данных.");
+                o.PdCategories = Known(o.PdCategories, ObjectCatalog.PdCategories, "категория персональных данных");
+                if (o.Kind != "ispdn" && (o.PdCategories.Length > 0 || o.Subjects.Length > 0 || o.Volume.Length > 0)) throw new InvalidDataException("Сведения о персональных данных указываются только для ИСПДн.");
             }
             a.PlanItems = (a.PlanItems ?? new PlanItem[0]).Where(x => x != null && !String.IsNullOrEmpty(x.Key)).ToArray();
             foreach (PlanItem item in a.PlanItems) { item.Responsible = item.Responsible ?? ""; item.Deadline = item.Deadline ?? ""; }

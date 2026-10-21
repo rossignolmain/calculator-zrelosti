@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -256,7 +256,7 @@ namespace MaturityApp
         void ShowPage()
         {
             building = true; center.Children.Clear(); answerRadios.Clear(); answerBorders.Clear(); quickRows.Clear(); commonCells.Clear(); quickScore = quickNotice = quickHint = null; quickCopySource = null; massExpander = null; massCriterionBox = null; massScopeText = null; massValueButtons.Clear();
-            passportSummary = passportUnknown = objectTargetText = null; objectRows = componentRows = connectionRows = toolRows = null; noConnectionsBox = null;
+            passportSummary = passportUnknown = objectTargetText = null; objectRows = componentRows = connectionRows = toolRows = segmentRows = null; noConnectionsBox = null;
             reportMissing = previousText = null; participantRows = null; planRows = null;
             directionLevel = directionP = directionProgress = remainingText = overallValue = overallLabel = answeredValue = countValue = null; recommendationPanel = null;
             bool assessing = page == "quick" || page == "assessment";
