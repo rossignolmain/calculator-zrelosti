@@ -30,6 +30,8 @@ namespace MaturityApp
         public string DirectionName, CriterionName, Type, Action, ConditionText;
         public double? Current, Required;
         public bool BlockingTarget, Preliminary;
+        // Stable identity of a plan row, used to keep its owner and deadline (PlanItem).
+        public string Key { get { return DirectionId + ":" + (CriterionIndex.HasValue ? CriterionIndex.Value.ToString() : "P") + ":" + Type; } }
     }
     public class GroupedAction
     {
@@ -67,7 +69,7 @@ namespace MaturityApp
     public static class Analysis
     {
         const double Epsilon = 1e-9;
-        public const string PriorityExplanation = "Сначала оценить неизвестные обязательные критерии, затем устранить подтверждённые дефициты, затем заполнить остальные пропуски. Внутри групп — по охвату направлений и весу критерия. Это порядок рассмотрения, а не оценка стоимости или сроков работ.";
+        public const string PriorityExplanation = "Сначала оценить неизвестные обязательные виды требований, затем устранить подтверждённые дефициты, затем заполнить остальные пропуски. Внутри групп — по охвату направлений и весу вида требования. Это порядок рассмотрения, а не оценка стоимости или сроков работ.";
 
         public static AssessmentAnalysis Build(Assessment assessment)
         {
@@ -146,7 +148,7 @@ namespace MaturityApp
                         DirectionId = direction.Id, DirectionName = Data.DirectionNames[direction.Id - 1], TargetLevel = direction.Target,
                         CriterionIndex = criterion, CriterionName = Data.Criteria[criterion].Name,
                         Type = "assess", Action = "Оценить", Current = null, Required = required ? (double?)minimum.Value : null,
-                        ConditionText = required ? "Определите подтверждённую оценку. Условие для целевого уровня: " + minimum.Text : "Выберите оценку по подтверждающим данным. Обязательный минимум для этого критерия на целевом уровне не установлен.",
+                        ConditionText = required ? "Определите подтверждённую оценку. Условие для целевого уровня: " + minimum.Text : "Выберите оценку по подтверждающим данным. Обязательный минимум для этого вида требования на целевом уровне не установлен.",
                         BlockingTarget = required, Preliminary = true
                     });
                 }
@@ -163,9 +165,9 @@ namespace MaturityApp
             if (current.Score < Calc.Thresholds[direction.Target - 1] - Epsilon)
                 output.Add(new DeficitRecord {
                     DirectionId = direction.Id, DirectionName = Data.DirectionNames[direction.Id - 1], TargetLevel = direction.Target,
-                    CriterionIndex = null, CriterionName = "P — взвешенная сумма", Type = "score", Action = "Достичь порога P",
+                    CriterionIndex = null, CriterionName = "Сумма баллов направления", Type = "score", Action = "Набрать сумму баллов",
                     Current = current.Score, Required = Calc.Thresholds[direction.Target - 1],
-                    ConditionText = "Достичь P ≥ " + Calc.F(Calc.Thresholds[direction.Target - 1], "0.000") + " и одновременно выполнить обязательные минимумы критериев таблицы 3.",
+                    ConditionText = "Повысить значения видов требований так, чтобы сумма баллов направления была не ниже " + Calc.F(Calc.Thresholds[direction.Target - 1], "0.###") + " (порог уровня " + direction.Target + " по таблице 3 Методики) при выполнении обязательных значений.",
                     BlockingTarget = true, Preliminary = !current.Complete
                 });
         }

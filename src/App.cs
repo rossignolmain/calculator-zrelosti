@@ -30,31 +30,35 @@ namespace MaturityApp
                 if (args.Length > 0 && args[0] == "--render-preview")
                 {
                     string folder = args[1]; Directory.CreateDirectory(folder);
+                    // Neutral demo: preview images must not suggest any particular industry or system.
                     Assessment demo = Assessment.Create();
-                    demo.Organization = "Пример организации"; demo.SystemName = "Информационная система";
-                    demo.Assessor = "Ответственный за информационную безопасность";
-                    demo.OrganizationShort = "Пример"; demo.City = "Город";
-                    demo.ApproverPosition = "Руководитель организации";
-                    demo.Passport = SystemPassports.CreateSingleArm();
-                    demo.Passport.ExternalSystem = "Внешняя информационная система (пример)";
+                    demo.Organization = "Наименование организации"; demo.SystemName = "Наименование объекта оценки";
+                    demo.Assessor = "Фамилия И. О."; demo.AssessorPosition = "Ответственный за защиту информации";
+                    demo.OrganizationShort = "Организация"; demo.City = "Город"; demo.ApproverPosition = "Руководитель организации";
+                    demo.Objects = new[] { new ProtectionObject { Kind = "ispdn", Level = 3 } }; ObjectCatalog.ApplyToAssessment(demo);
+                    demo.Passport = SystemPassports.CreateEmpty();
+                    demo.Passport.Components = new[] { new PassportComponent { Kind = "АРМ пользователя", Count = 12 }, new PassportComponent { Kind = "Сервер", Count = 2, Note = "файловый сервер, СУБД" }, new PassportComponent { Kind = "Межсетевой экран", Count = 1 } };
+                    demo.Passport.Connections = new[] { new PassportConnection { System = "Внешняя система (пример)", Method = "client", Channel = "vpn" } };
+                    demo.Passport.Tools = new[] { new PassportTool { Class = "av", Product = "Антивирус (пример)" } };
                     demo.Directions[0].Answers = new double?[] { 1, 1, .5, .5, 1, .5, 0, .5 };
                     demo.Directions[0].Evidence = "Положение о защите информации, утверждённые регламенты и журнал плановых проверок.";
                     MainWindow window = new MainWindow(demo, false);
-                    window.RenderPreview("quick", Path.Combine(folder, "Оценка.png"));
-                    window.RenderPreview("object", Path.Combine(folder, "Типовой АРМ.png"));
-                    window.RenderPreview("quick", Path.Combine(folder, "Оценка компактно.png"), 1280, 740);
-                    window.RenderPreview("bulk", Path.Combine(folder, "Массовое заполнение.png"));
-                    window.RenderPreview("assessment", Path.Combine(folder, "Подробно.png"));
-                    window.RenderPreview("results", Path.Combine(folder, "Результаты.png"));
-                    window.RenderPreview("analysis", Path.Combine(folder, "Аналитика.png"));
-                    window.RenderPreview("settings", Path.Combine(folder, "Параметры.png"));
-                    window.RenderPreview("settings", Path.Combine(folder, "Данные для отчёта полностью.png"), 1450, 3300);
+                    window.RenderPreview("object", Path.Combine(folder, "1 Объект оценки.png"), 1450, 2100);
+                    window.RenderPreview("quick", Path.Combine(folder, "2 Анкета.png"));
+                    window.RenderPreview("quick", Path.Combine(folder, "2 Анкета компактно.png"), 1280, 740);
+                    window.RenderPreview("bulk", Path.Combine(folder, "2 Массовое заполнение.png"));
+                    window.RenderPreview("assessment", Path.Combine(folder, "2 Подробная анкета.png"));
+                    window.RenderPreview("results", Path.Combine(folder, "3 Результат.png"));
+                    window.RenderPreview("analysis", Path.Combine(folder, "4 План улучшений.png"), 1450, 1500);
+                    window.RenderPreview("settings", Path.Combine(folder, "5 Сведения для отчёта.png"), 1450, 3300);
                     string demoLibrary = Path.Combine(folder, "Демо-библиотека"); Directory.CreateDirectory(demoLibrary);
-                    string demoTemplate = TemplateLibrary.SaveNew(AnswerTemplates.Create(demo, "Школа · АИСТ ГБД · ГИС К3"), demoLibrary);
+                    string demoTemplate = TemplateLibrary.SaveNew(AnswerTemplates.Create(demo, "Пример · ИСПДн УЗ-3"), demoLibrary);
+                    TemplateLibrary.SaveNewProfile(demo, "Организация", demoLibrary);
                     LibraryWindow library = new LibraryWindow(demo, null); library.UseFolderForSession(demoLibrary); library.Select(demoTemplate);
-                    library.RenderPreview(Path.Combine(folder, "Библиотека шаблонов.png"));
+                    library.RenderPreview(Path.Combine(folder, "6 Шаблоны.png"));
+                    library.ShowOrganizations(true); library.RenderPreview(Path.Combine(folder, "6 Организации.png"));
                     ExportReviewWindow review = new ExportReviewWindow(demo, true);
-                    review.RenderPreview(Path.Combine(folder, "Комплект.png"));
+                    review.RenderPreview(Path.Combine(folder, "7 Архив с отчётами.png"));
                     app.Shutdown(); return 0;
                 }
                 Assessment initial = null;
@@ -144,12 +148,13 @@ namespace MaturityApp
                 catch
                 {
                     assessment = Assessment.Create();
-                    recoveryError = "Автокопия повреждена. Создана новая оценка; исходная автокопия сохранена для восстановления.";
+                    recoveryError = "Файл автосохранения повреждён. Создана новая оценка; повреждённый файл сохранён рядом для восстановления.";
                     try { File.Copy(autoPath, Path.Combine(Path.GetDirectoryName(autoPath), "Автосохранение-повреждено-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".json"), false); }
                     catch { recoveryError = "Не удалось прочитать автокопию: " + autoPath + ". Сохраните её отдельно перед изменениями."; }
                 }
             }
-            Title = "Уровень зрелости · Калькулятор Узи";
+            Title = "Оценка уровня зрелости (Узи)";
+            Language = System.Windows.Markup.XmlLanguage.GetLanguage("ru-RU"); // dates as 21.10.2026
             MinWidth = 1100; MinHeight = 720;
             Width = Math.Max(MinWidth, Math.Min(1450, SystemParameters.WorkArea.Width - 40));
             Height = Math.Max(MinHeight, Math.Min(960, SystemParameters.WorkArea.Height - 40));
@@ -159,19 +164,19 @@ namespace MaturityApp
             saveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(900) };
             saveTimer.Tick += (s, e) => { saveTimer.Stop(); AutoSave(); };
             BuildShell(); ShowPage();
-            if (autoOk) status.Text = "Восстановлена последняя оценка · данные на этом компьютере";
+            if (autoOk) status.Text = "Восстановлена последняя оценка · автосохранение включено";
             if (recoveryError != null) status.Text = recoveryError;
             Closing += (s, e) =>
             {
                 if (!dirty) return;
                 if (projectPath != null)
                 {
-                    MessageBoxResult saveChoice = MessageBox.Show(this, "Сохранить изменения в проекте «" + Path.GetFileName(projectPath) + "»?", "Изменённая оценка", MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
+                    MessageBoxResult saveChoice = MessageBox.Show(this, "Сохранить изменения в файле «" + Path.GetFileName(projectPath) + "»?", "Изменённая оценка", MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
                     if (saveChoice == MessageBoxResult.Cancel || saveChoice == MessageBoxResult.Yes && !SaveProject(false)) { e.Cancel = true; return; }
                 }
                 else if (bundlePath != null)
                 {
-                    MessageBoxResult saveChoice = MessageBox.Show(this, "Обновить комплект «" + Path.GetFileName(bundlePath) + "» перед закрытием?", "Изменённая оценка", MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
+                    MessageBoxResult saveChoice = MessageBox.Show(this, "Обновить архив «" + Path.GetFileName(bundlePath) + "» перед закрытием?", "Изменённая оценка", MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
                     if (saveChoice == MessageBoxResult.Cancel || saveChoice == MessageBoxResult.Yes && !SaveBundleFast(false)) { e.Cancel = true; return; }
                 }
                 saveTimer.Stop(); AutoSave();
@@ -180,7 +185,7 @@ namespace MaturityApp
                 if (answer == MessageBoxResult.Cancel) e.Cancel = true;
                 if (answer == MessageBoxResult.Yes && !SaveProject(false)) e.Cancel = true;
             };
-            CommandBindings.Add(new CommandBinding(ApplicationCommands.Save, (s, e) => { if (projectPath == null && bundlePath != null) SaveBundleFast(false); else SaveProject(false); }));
+            CommandBindings.Add(new CommandBinding(ApplicationCommands.Save, (s, e) => SaveCurrent()));
             CommandBindings.Add(new CommandBinding(ApplicationCommands.Open, (s, e) => OpenProject()));
             CommandBindings.Add(new CommandBinding(ApplicationCommands.New, (s, e) => NewProject()));
             InputBindings.Add(new KeyBinding(ApplicationCommands.Save, Key.S, ModifierKeys.Control));
@@ -188,6 +193,8 @@ namespace MaturityApp
             InputBindings.Add(new KeyBinding(ApplicationCommands.New, Key.N, ModifierKeys.Control));
             InputBindings.Add(new KeyBinding(new RelayCommand(() => SaveProject(true)), Key.S, ModifierKeys.Control | ModifierKeys.Shift));
         }
+        // Ctrl+S and the "Сохранить" button: an opened archive is updated in place, otherwise the assessment file.
+        bool SaveCurrent() { return projectPath == null && bundlePath != null ? SaveBundleFast(false) : SaveProject(false); }
         public void SetProjectPath(string path)
         {
             bool bundle = String.Equals(Path.GetExtension(path), ".zip", StringComparison.OrdinalIgnoreCase);
@@ -203,33 +210,31 @@ namespace MaturityApp
             Content = shell;
             Grid header = new Grid { Margin = new Thickness(24, 18, 20, 14) };
             header.ColumnDefinitions.Add(new ColumnDefinition()); header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); shell.Children.Add(header);
-            StackPanel title = new StackPanel(); headerTitle = Theme.Text("Оценка зрелости", 24, null, true);
-            headerSub = Theme.Text("Данные сохраняются автоматически", 12, Theme.Muted); headerSub.Margin = new Thickness(0, 5, 10, 0); title.Children.Add(headerTitle); title.Children.Add(headerSub); header.Children.Add(title);
+            StackPanel title = new StackPanel(); headerTitle = Theme.Text("Анкета", 24, null, true);
+            headerSub = Theme.Text("Автосохранение включено", 12, Theme.Muted); headerSub.Margin = new Thickness(0, 5, 10, 0); title.Children.Add(headerTitle); title.Children.Add(headerSub); header.Children.Add(title);
             StackPanel actions = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center }; Grid.SetColumn(actions, 1); header.Children.Add(actions);
-            actions.Children.Add(Theme.Button("Новый АРМ", NewArmProject));
-            actions.Children.Add(Theme.Button("Открыть", OpenProject));
+            Button create = Theme.Button("Новая оценка", NewProject); create.ToolTip = "Начать оценку другого объекта (Ctrl+N). Текущую работу предложим сохранить."; actions.Children.Add(create);
+            Button open = Theme.Button("Открыть", OpenProject); open.ToolTip = "Открыть сохранённую оценку или архив с отчётами (Ctrl+O)."; actions.Children.Add(open);
+            Button save = Theme.Button("Сохранить", () => SaveCurrent()); save.ToolTip = "Сохранить оценку в файл (Ctrl+S). Работа также сохраняется автоматически на этом компьютере."; actions.Children.Add(save);
             Button more = Theme.Button("Ещё  ▾", () => { }); ContextMenu menu = new ContextMenu();
-            MenuItem create = new MenuItem { Header = "Новая оценка" }; create.Click += (s, e) => NewProject(); menu.Items.Add(create);
-            MenuItem save = new MenuItem { Header = "Сохранить файл проекта (.uzi.json)" }; save.Click += (s, e) => SaveProject(false); menu.Items.Add(save);
-            MenuItem saveAs = new MenuItem { Header = "Сохранить проект как…" }; saveAs.Click += (s, e) => SaveProject(true); menu.Items.Add(saveAs);
-            MenuItem libraryItem = new MenuItem { Header = "Библиотека шаблонов…" }; libraryItem.Click += (s, e) => OpenLibrary(); menu.Items.Add(libraryItem);
-            menu.Items.Add(new Separator());
-            MenuItem word = new MenuItem { Header = "Только отчёт Word (.docx)" }; word.Click += (s, e) => Export(true); menu.Items.Add(word);
-            MenuItem excel = new MenuItem { Header = "Только таблица Excel (.xlsx)" }; excel.Click += (s, e) => Export(false); menu.Items.Add(excel);
-            MenuItem bundleAs = new MenuItem { Header = "Сохранить комплект как…" }; bundleAs.Click += (s, e) => SaveBundleFast(true); menu.Items.Add(bundleAs);
-            MenuItem custom = new MenuItem { Header = "Выбрать состав комплекта…" }; custom.Click += (s, e) => ExportBundle(); menu.Items.Add(custom);
+            MenuItem saveAs = new MenuItem { Header = "Сохранить как…" }; saveAs.Click += (s, e) => SaveProject(true); menu.Items.Add(saveAs);
+            MenuItem libraryItem = new MenuItem { Header = "Шаблоны и организации…" }; libraryItem.Click += (s, e) => OpenLibrary(); menu.Items.Add(libraryItem);
             more.ContextMenu = menu; more.Click += (s, e) => { menu.PlacementTarget = more; menu.Placement = PlacementMode.Bottom; menu.IsOpen = true; }; actions.Children.Add(more);
-            bundleButton = Theme.Button("Сохранить комплект", () => SaveBundleFast(false), true);
-            bundleButton.ToolTip = "Проект, Word и Excel одним действием. При первом сохранении выберите файл; следующие нажатия обновят его."; actions.Children.Add(bundleButton);
+            bundleButton = Theme.Button("Отчёт  ▾", () => { }, true); ContextMenu reports = new ContextMenu();
+            MenuItem word = new MenuItem { Header = "Отчёт Word…" }; word.Click += (s, e) => Export(true); reports.Items.Add(word);
+            MenuItem excel = new MenuItem { Header = "Таблица Excel…" }; excel.Click += (s, e) => Export(false); reports.Items.Add(excel);
+            MenuItem all = new MenuItem { Header = "Всё в одном архиве: оценка, Word и Excel…" }; all.Click += (s, e) => ExportBundle(); reports.Items.Add(all);
+            bundleButton.ContextMenu = reports; bundleButton.Click += (s, e) => { reports.PlacementTarget = bundleButton; reports.Placement = PlacementMode.Bottom; reports.IsOpen = true; };
+            bundleButton.ToolTip = "Сформировать отчёт по разделу VI Методики."; actions.Children.Add(bundleButton);
             Grid tabs = new Grid { Margin = new Thickness(24, 0, 24, 12) }; tabs.ColumnDefinitions.Add(new ColumnDefinition()); tabs.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); Grid.SetRow(tabs, 1); shell.Children.Add(tabs);
             StackPanel nav = new StackPanel { Orientation = Orientation.Horizontal };
-            navObject = Nav("Объект", "object"); navAssess = Nav("Оценка", "quick"); navResults = Nav("Результат", "results"); navAnalysis = Nav("Аналитика и план", "analysis"); navSettings = Nav("Данные для отчёта", "settings"); nav.Children.Add(navObject); nav.Children.Add(navAssess); nav.Children.Add(navResults); nav.Children.Add(navAnalysis); nav.Children.Add(navSettings); tabs.Children.Add(nav);
+            navObject = Nav("Объект оценки", "object"); navAssess = Nav("Анкета", "quick"); navResults = Nav("Результат", "results"); navAnalysis = Nav("План улучшений", "analysis"); navSettings = Nav("Сведения для отчёта", "settings"); nav.Children.Add(navObject); nav.Children.Add(navAssess); nav.Children.Add(navResults); nav.Children.Add(navAnalysis); nav.Children.Add(navSettings); tabs.Children.Add(nav);
             StackPanel progress = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center }; Grid.SetColumn(progress, 1); tabs.Children.Add(progress);
             sidebarProgress = Theme.Text("Заполнено 0 из 168", 12, Theme.Muted); progress.Children.Add(sidebarProgress);
             globalProgress = new ProgressBar { Minimum = 0, Maximum = 100, Width = 145, Height = 5, Margin = new Thickness(12, 0, 0, 0), Foreground = Theme.Blue, Background = Theme.B("#DDE5F1"), BorderThickness = new Thickness(0) }; progress.Children.Add(globalProgress);
             center = new Grid { Margin = new Thickness(24, 0, 24, 0) }; Grid.SetRow(center, 2); shell.Children.Add(center);
             Grid footer = new Grid { Margin = new Thickness(24, 8, 24, 10) }; footer.ColumnDefinitions.Add(new ColumnDefinition()); footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); Grid.SetRow(footer, 3); shell.Children.Add(footer);
-            status = Theme.Text("Автосохранение включено · данные на этом компьютере", 11, Theme.Muted); footer.Children.Add(status);
+            status = Theme.Text("Автосохранение включено", 11, Theme.Muted); footer.Children.Add(status);
             undoButton = Theme.Button("Отменить заполнение", UndoCopiedAnswers); undoButton.Foreground = Theme.Blue; undoButton.FontSize = 11; undoButton.Padding = new Thickness(8, 4, 8, 4); undoButton.Visibility = Visibility.Collapsed; Grid.SetColumn(undoButton, 1); footer.Children.Add(undoButton);
         }
         Button Nav(string label, string destination)
@@ -251,9 +256,8 @@ namespace MaturityApp
         void ShowPage()
         {
             building = true; center.Children.Clear(); answerRadios.Clear(); answerBorders.Clear(); quickRows.Clear(); commonCells.Clear(); quickScore = quickNotice = quickHint = null; quickCopySource = null; massExpander = null; massCriterionBox = null; massScopeText = null; massValueButtons.Clear();
-            passportDescription = passportTopology = passportUnknown = null; reportMissing = previousText = null; participantRows = null;
-            passportChannelChoice = passportInternetChoice = null;
-            passportReference = null; passportReferenceLink = null;
+            passportSummary = passportUnknown = objectTargetText = null; objectRows = componentRows = connectionRows = toolRows = null; noConnectionsBox = null;
+            reportMissing = previousText = null; participantRows = null; planRows = null;
             directionLevel = directionP = directionProgress = remainingText = overallValue = overallLabel = answeredValue = countValue = null; recommendationPanel = null;
             bool assessing = page == "quick" || page == "assessment";
             navObject.Background = page == "object" ? Theme.Blue : Brushes.Transparent; navObject.Foreground = page == "object" ? Brushes.White : Theme.Muted;
@@ -261,7 +265,7 @@ namespace MaturityApp
             navResults.Background = page == "results" ? Theme.Blue : Brushes.Transparent; navResults.Foreground = page == "results" ? Brushes.White : Theme.Muted;
             navAnalysis.Background = page == "analysis" ? Theme.Blue : Brushes.Transparent; navAnalysis.Foreground = page == "analysis" ? Brushes.White : Theme.Muted;
             navSettings.Background = page == "settings" ? Theme.Blue : Brushes.Transparent; navSettings.Foreground = page == "settings" ? Brushes.White : Theme.Muted;
-            headerTitle.Text = page == "object" ? "Типовой АРМ" : page == "quick" ? "Оценка зрелости" : page == "assessment" ? "Подробная оценка" : page == "results" ? "Результат оценки" : page == "analysis" ? "Аналитика и план" : "Данные для отчёта";
+            headerTitle.Text = page == "object" ? "Объект оценки" : page == "quick" ? "Анкета" : page == "assessment" ? "Подробная анкета" : page == "results" ? "Результат" : page == "analysis" ? "План улучшений" : "Сведения для отчёта";
             if (page == "object") BuildPassport(); else if (page == "quick") BuildQuickAssessment(); else if (page == "assessment") BuildAssessment(); else if (page == "results") BuildResults(); else if (page == "analysis") BuildAnalysis(); else BuildSettings();
             building = false; UpdateNumbers(); UpdateHeader();
         }
@@ -275,13 +279,13 @@ namespace MaturityApp
             Grid grid = new Grid { Margin = new Thickness(0, 0, 0, 20) };
             for (int i = 0; i < 3; i++) grid.ColumnDefinitions.Add(new ColumnDefinition());
             TextBlock[] values = new TextBlock[3];
-            string[] labels = { "ТЕКУЩИЙ ПОКАЗАТЕЛЬ УЗИ", "ЗАПОЛНЕНИЕ АНКЕТЫ", "НАПРАВЛЕНИЯ В ОЦЕНКЕ" };
+            string[] labels = { "УРОВЕНЬ ЗРЕЛОСТИ (УЗИ)", "ЗАПОЛНЕНИЕ АНКЕТЫ", "НАПРАВЛЕНИЯ В ОБЛАСТИ ОЦЕНКИ" };
             for (int i = 0; i < 3; i++)
             {
                 StackPanel stack = new StackPanel(); stack.Children.Add(Theme.Text(labels[i], 10, Theme.Muted, true));
                 values[i] = Theme.Text("—", 30, i == 0 ? Theme.Blue : Theme.Ink, true); values[i].Margin = new Thickness(0, 6, 0, 2); stack.Children.Add(values[i]);
                 if (i == 0) { overallLabel = Theme.Text("Предварительный расчёт", 11, Theme.Muted); stack.Children.Add(overallLabel); }
-                else stack.Children.Add(Theme.Text(i == 1 ? "Пустой ответ отличается от оценки 0" : "Галочка в таблице включает направление", 11, Theme.Muted));
+                else stack.Children.Add(Theme.Text(i == 1 ? "Пусто — не оценено; 0 — оценено как «не выполняется»" : "Неприменимые направления исключаются (п. 13 Методики)", 11, Theme.Muted));
                 Border card = Theme.Card(stack, new Thickness(18, 15, 16, 15)); card.Margin = new Thickness(0, 0, i < 2 ? 12 : 0, 0); Grid.SetColumn(card, i); grid.Children.Add(card);
             }
             overallValue = values[0]; answeredValue = values[1]; countValue = values[2]; return grid;
@@ -345,11 +349,11 @@ namespace MaturityApp
             {
                 int value = target; Button b = Theme.Button(target.ToString(), () => { d.Target = value; Changed(); ShowPage(); }, d.Target == target); b.Width = 40; b.Padding = new Thickness(0, 9, 0, 9); b.Margin = new Thickness(0, 0, 6, 0); b.IsEnabled = target >= Math.Max(1, assessment.Category); targets.Children.Add(b);
             }
-            score.Children.Add(targets); score.Children.Add(Theme.Text("Минимум для категории: " + Math.Max(1, assessment.Category) + ". Цель можно повысить до 4.", 11, Theme.Muted));
+            score.Children.Add(targets); score.Children.Add(Theme.Text("Минимум по типу объекта: " + Math.Max(1, assessment.Category) + ". Цель можно повысить до 4.", 11, Theme.Muted));
             aside.Children.Add(Theme.Card(score, new Thickness(16)));
             StackPanel hint = new StackPanel(); hint.Children.Add(Theme.Text("Что нужно до цели", 15, null, true)); recommendationPanel = new StackPanel { Margin = new Thickness(0, 12, 0, 0) }; hint.Children.Add(recommendationPanel);
             Border hintCard = Theme.Card(hint, new Thickness(16)); hintCard.Margin = new Thickness(0, 14, 0, 14); aside.Children.Add(hintCard);
-            aside.Children.Add(Theme.Text("P = Σ (вес × оценка). Уровень определяется по порогу суммы и обязательным минимумам таблицы 3. Неотвеченные критерии временно дают 0.", 11, Theme.Muted));
+            aside.Children.Add(Theme.Text("Уровень направления определяется по таблице 3 Методики: нужны и достаточная сумма баллов, и обязательные значения отдельных видов требований. Неотвеченные пока считаются как 0.", 11, Theme.Muted));
         }
         void UpdateNumbers()
         {
@@ -360,9 +364,9 @@ namespace MaturityApp
             if (overallLabel != null) overallLabel.Text = summary.Count == 0 ? "Выберите область оценки" : (summary.Complete ? "" : "Предварительно · ") + Calc.LevelName((int)Math.Floor(summary.Average));
             if (answeredValue != null) answeredValue.Text = summary.Answered + " / " + summary.Total;
             if (countValue != null) countValue.Text = summary.Count + " из 21";
-            if (bundleButton != null) { bundleButton.IsEnabled = summary.Count > 0; bundleButton.Content = bundlePath == null ? "Сохранить комплект" : "Обновить комплект"; }
+            if (bundleButton != null) { bundleButton.IsEnabled = summary.Count > 0; }
             if (undoButton != null) undoButton.Visibility = copiedAnswers != null && copiedAnswers.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-            if (quickScore != null) quickScore.Text = summary.Count == 0 ? "Узи —" : "Узи " + Calc.F(summary.Average, "0.00");
+            if (quickScore != null) quickScore.Text = summary.Count == 0 ? "Уровень зрелости (Узи): —" : "Уровень зрелости (Узи): " + Calc.F(summary.Average, "0.00");
             if (quickNotice != null) quickNotice.Text = summary.Count == 0 ? "Включите направления галочками в таблице" : summary.Complete ? "Анкета заполнена · целей достигнуто: " + summary.Met + "/" + summary.Count : "Предварительно · осталось ответов: " + (summary.Total - summary.Answered);
             foreach (QuickAnswerCell cell in commonCells) cell.Refresh();
             foreach (QuickRowView row in quickRows)
@@ -396,7 +400,7 @@ namespace MaturityApp
                         answerBorders[j][k].BorderBrush = check ? Theme.B("#89AEF0") : Theme.Line;
                     }
             }
-            if (remainingText != null) remainingText.Text = summary.Count == 0 ? "Область оценки пуста. Включите хотя бы одно направление в таблице." : summary.Complete ? "Анкета заполнена. Целевой уровень достигнут по " + summary.Met + " из " + summary.Count + " направлений." : "Предварительный результат: осталось ответить на " + (summary.Total - summary.Answered) + " вопросов. Неотвеченные критерии временно учтены как 0.";
+            if (remainingText != null) remainingText.Text = summary.Count == 0 ? "Область оценки пуста. Включите хотя бы одно направление в таблице." : summary.Complete ? "Анкета заполнена. Целевой уровень достигнут по " + summary.Met + " из " + summary.Count + " направлений." : "Предварительный результат: осталось ответить на " + (summary.Total - summary.Answered) + " вопросов. Неотвеченные виды требований временно учтены как 0.";
         }
         void BuildResults()
         {
@@ -436,9 +440,9 @@ namespace MaturityApp
                 foreach (string rec in r.Recommendations) { TextBlock t = Theme.Text("•  " + rec, 12, Theme.Muted); t.Margin = new Thickness(0, 9, 0, 0); recs.Children.Add(t); }
                 Border card = Theme.Card(recs, new Thickness(18)); card.Margin = new Thickness(0, 0, 0, 12); body.Children.Add(card);
             }
-            if (!any) body.Children.Add(Theme.Card(Theme.Text(sum.Count == 0 ? "Включите направления галочками на вкладке «Оценка»." : "Целевые уровни достигнуты по всем включённым направлениям.", 13)));
+            if (!any) body.Children.Add(Theme.Card(Theme.Text(sum.Count == 0 ? "Включите направления галочками на вкладке «Анкета»." : "Целевые уровни достигнуты по всем включённым направлениям.", 13)));
             StackPanel exports = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 20, 0, 24) };
-            exports.Children.Add(Theme.Button("Сохранить комплект", () => SaveBundleFast(false), true)); exports.Children.Add(Theme.Button("Отчёт Word", () => Export(true))); exports.Children.Add(Theme.Button("Таблица Excel", () => Export(false))); body.Children.Add(exports);
+            exports.Children.Add(Theme.Button("Отчёт Word…", () => Export(true), true)); exports.Children.Add(Theme.Button("Таблица Excel…", () => Export(false))); exports.Children.Add(Theme.Button("Всё в одном архиве…", ExportBundle)); body.Children.Add(exports);
         }
         FrameworkElement ProfileChart()
         {
@@ -479,7 +483,7 @@ namespace MaturityApp
             StackPanel metadata = new StackPanel(); metadata.Children.Add(Theme.Text("Сведения об оценке", 18, null, true));
             Grid fields = new Grid { Margin = new Thickness(0, 16, 0, 0) }; fields.ColumnDefinitions.Add(new ColumnDefinition()); fields.ColumnDefinitions.Add(new ColumnDefinition());
             AddField(fields, 0, 0, "Организация", assessment.Organization, value => assessment.Organization = value);
-            AddField(fields, 0, 1, "Информационная система / объект оценки", assessment.SystemName, value => assessment.SystemName = value);
+            AddField(fields, 0, 1, "Объект оценки", assessment.SystemName, value => assessment.SystemName = value);
             AddField(fields, 1, 0, "Кто провёл оценку", assessment.Assessor, value => assessment.Assessor = value);
             StackPanel dateField = new StackPanel { Margin = new Thickness(0, 0, 0, 14) }; dateField.Children.Add(Theme.Text("Дата оценки", 12, Theme.Muted));
             DatePicker date = new DatePicker { SelectedDate = DateTime.ParseExact(assessment.Date, "yyyy-MM-dd", CultureInfo.InvariantCulture), Margin = new Thickness(0, 7, 0, 0), Height = 34, FontSize = 13 };
@@ -498,12 +502,12 @@ namespace MaturityApp
             metadata.Children.Add(Theme.Text("Общие замечания", 12, Theme.Muted));
             TextBox notes = new TextBox { Text = assessment.Notes, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MinHeight = 70, MaxHeight = 160, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Margin = new Thickness(0, 7, 0, 0) }; notes.TextChanged += (s, e) => { assessment.Notes = notes.Text; Changed(); }; metadata.Children.Add(notes);
             StackPanel profiles = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 14, 0, 0) };
-            profiles.Children.Add(Theme.Button("Загрузить реквизиты", LoadProfile)); profiles.Children.Add(Theme.Button("Сохранить реквизиты", SaveProfile)); metadata.Children.Add(profiles);
-            TextBlock profileHelp = Theme.Text("Реквизиты и подписанты хранятся отдельно от оценки. Их загрузка не изменяет систему, дату, ответы и цели.", 11, Theme.Muted); profileHelp.Margin = new Thickness(0, 10, 0, 0); metadata.Children.Add(profileHelp);
+            profiles.Children.Add(Theme.Button("Профили организаций…", () => OpenLibrary(true))); metadata.Children.Add(profiles);
+            TextBlock profileHelp = Theme.Text("Профиль организации хранит реквизиты, подписантов, контакты и участников. Его можно подставить в оценку любого объекта этой организации; ответы и цели он не меняет.", 11, Theme.Muted); profileHelp.Margin = new Thickness(0, 10, 0, 0); metadata.Children.Add(profileHelp);
             body.Children.Add(Theme.Card(metadata));
             BuildReportData(body);
             StackPanel about = new StackPanel(); about.Children.Add(Theme.Text("О расчёте", 18, null, true));
-            TextBlock rules = Theme.Text("21 базовое направление × 8 критериев. D = вес × оценка; P = сумма D. Текущий уровень — максимальный уровень с выполненным порогом P и обязательными минимумами таблицы 3. Итог Узи округляется до двух знаков. Интервал 0,2 ≤ P < 0,225 трактуется как уровень 0, как в исходном калькуляторе.\n\nНезаполненные ответы временно учитываются как 0; до полного заполнения итог помечается как предварительный. Если все направления исключены, показатель не рассчитывается. Данные не передаются в интернет.\n\nИсточник алгоритма и формулировок: 117fstec.credos.ru/maturity. Методика от " + Data.MethodDate + ". Это самостоятельное приложение; результат зависит от введённых данных.", 12, Theme.Muted); rules.Margin = new Thickness(0, 12, 0, 0); about.Children.Add(rules);
+            TextBlock rules = Theme.Text("Расчёт по Методике оценки уровня зрелости, утверждённой ФСТЭК России " + Data.MethodDate + ": 21 направление × 8 видов требований (таблица 2).\n\nДля каждого вида требования D = вес × значение (п. 29); P = сумма D (п. 30). Уровень направления — наибольший уровень таблицы 3, для которого выполнены и порог P, и обязательные значения отдельных видов требований. Узи — среднее уровней включённых направлений (п. 10), округляется до двух знаков. Промежуток 0,2 ≤ P < 0,225 таблицей 3 не покрыт и считается уровнем 0.\n\nНезаполненные ответы временно учитываются как 0, итог помечается как предварительный. Если все направления исключены, Узи не рассчитывается. Данные не передаются в интернет; результат зависит от введённых сведений.", 12, Theme.Muted); rules.Margin = new Thickness(0, 12, 0, 0); about.Children.Add(rules);
             Expander aboutCard = new Expander { Header = "Методика и справка", Content = about, Margin = new Thickness(0, 18, 0, 24) }; body.Children.Add(aboutCard);
         }
         void AddField(Grid grid, int row, int column, string label, string value, Action<string> setter)
@@ -515,10 +519,10 @@ namespace MaturityApp
         }
         void UpdateHeader()
         {
-            headerSub.Text = page == "quick" ? "Автокопия включена · 21 направление × 8 критериев" : assessment.Organization.Length > 0 ? assessment.Organization + (assessment.SystemName.Length > 0 ? " · " + assessment.SystemName : "") : assessment.SystemName.Length > 0 ? assessment.SystemName : "Сведения для отчёта можно заполнить по необходимости";
+            headerSub.Text = page == "quick" ? "21 направление × 8 видов требований · автосохранение включено" : assessment.Organization.Length > 0 ? assessment.Organization + (assessment.SystemName.Length > 0 ? " · " + assessment.SystemName : "") : assessment.SystemName.Length > 0 ? assessment.SystemName : "Автосохранение включено";
             headerSub.TextTrimming = TextTrimming.CharacterEllipsis; headerSub.TextWrapping = TextWrapping.NoWrap;
             string activePath = projectPath ?? bundlePath;
-            Title = "Уровень зрелости · " + (activePath == null ? "Новая оценка" : Path.GetFileNameWithoutExtension(activePath)) + (dirty ? " *" : "");
+            Title = "Оценка уровня зрелости · " + (activePath == null ? "новая оценка" : Path.GetFileNameWithoutExtension(activePath)) + (dirty ? " *" : "");
         }
         void Changed()
         {
@@ -529,7 +533,7 @@ namespace MaturityApp
         void AutoSave()
         {
             if (!live) return;
-            try { Store.Save(assessment, autoPath); autoOk = true; status.Text = "Автосохранено " + DateTime.Now.ToString("HH:mm") + " · данные на этом компьютере"; }
+            try { Store.Save(assessment, autoPath); autoOk = true; status.Text = "Автосохранено в " + DateTime.Now.ToString("HH:mm"); }
             catch (Exception ex) { autoOk = false; status.Text = "Автосохранение недоступно · используйте «Сохранить» · " + ex.Message; }
         }
         bool SaveProject(bool saveAs)
@@ -537,11 +541,11 @@ namespace MaturityApp
             string path = projectPath;
             if (saveAs || path == null)
             {
-                SaveFileDialog dialog = new SaveFileDialog { Title = "Сохранить оценку", Filter = "Проект оценки (*.uzi.json)|*.uzi.json|JSON (*.json)|*.json", FileName = DefaultName() + ".uzi.json", AddExtension = true, DefaultExt = ".uzi.json" };
+                SaveFileDialog dialog = new SaveFileDialog { Title = "Сохранить оценку", Filter = "Файл оценки (*.uzi.json)|*.uzi.json|JSON (*.json)|*.json", FileName = DefaultName() + ".uzi.json", AddExtension = true, DefaultExt = ".uzi.json" };
                 if (dialog.ShowDialog(this) != true) return false; path = dialog.FileName;
             }
             try { Store.Save(assessment, path); projectPath = path; dirty = false; AutoSave(); status.Text = "Сохранено: " + path; UpdateHeader(); return true; }
-            catch (Exception ex) { ShowError("Не удалось сохранить проект", ex); return false; }
+            catch (Exception ex) { ShowError("Не удалось сохранить оценку", ex); return false; }
         }
         bool PreserveCurrent()
         {
@@ -556,7 +560,7 @@ namespace MaturityApp
         }
         void OpenProject()
         {
-            OpenFileDialog dialog = new OpenFileDialog { Title = "Открыть оценку или комплект", Filter = "Оценки и комплекты (*.uzi.json;*.json;*.zip)|*.uzi.json;*.json;*.zip|Все файлы (*.*)|*.*" };
+            OpenFileDialog dialog = new OpenFileDialog { Title = "Открыть оценку", Filter = "Оценка или архив с отчётами (*.uzi.json;*.json;*.zip)|*.uzi.json;*.json;*.zip|Все файлы (*.*)|*.*" };
             if (dialog.ShowDialog(this) != true) return;
             Assessment loaded;
             try { loaded = ProjectTools.LoadAssessmentFile(dialog.FileName); } catch (Exception ex) { ShowError("Не удалось открыть оценку", ex); return; }
@@ -571,7 +575,7 @@ namespace MaturityApp
         void Export(bool word)
         {
             Summary s = Calc.Summary(assessment);
-            if (s.Count == 0) { MessageBox.Show(this, "Для отчёта включите хотя бы одно направление в таблице на вкладке «Оценка».", "Область оценки пуста", MessageBoxButton.OK, MessageBoxImage.Information); return; }
+            if (s.Count == 0) { MessageBox.Show(this, "Для отчёта включите хотя бы одно направление в таблице на вкладке «Анкета».", "Область оценки пуста", MessageBoxButton.OK, MessageBoxImage.Information); return; }
             SaveFileDialog dialog = new SaveFileDialog { Title = word ? "Сформировать отчёт Word" : "Выгрузить таблицу Excel", Filter = word ? "Документ Word (*.docx)|*.docx" : "Книга Excel (*.xlsx)|*.xlsx", FileName = DefaultName() + (word ? ".docx" : ".xlsx"), AddExtension = true, DefaultExt = word ? ".docx" : ".xlsx" };
             if (dialog.ShowDialog(this) != true) return;
             try
@@ -585,18 +589,18 @@ namespace MaturityApp
         }
         void ExportBundle()
         {
-            if (Calc.Summary(assessment).Count == 0) { MessageBox.Show(this, "Включите хотя бы одно направление в таблице на вкладке «Оценка».", "Область оценки пуста", MessageBoxButton.OK, MessageBoxImage.Information); return; }
+            if (Calc.Summary(assessment).Count == 0) { MessageBox.Show(this, "Включите хотя бы одно направление в таблице на вкладке «Анкета».", "Область оценки пуста", MessageBoxButton.OK, MessageBoxImage.Information); return; }
             ExportReviewWindow review = new ExportReviewWindow(assessment, true) { Owner = this };
             if (review.ShowDialog() != true) { if (review.GoToSettings) { page = "settings"; ShowPage(); } return; }
-            SaveFileDialog dialog = new SaveFileDialog { Title = "Сохранить комплект оценки", Filter = "Архив комплекта (*.zip)|*.zip", FileName = DefaultName() + ".zip", AddExtension = true, DefaultExt = ".zip" };
+            SaveFileDialog dialog = new SaveFileDialog { Title = "Сохранить архив: оценка, Word и Excel", Filter = "Архив (*.zip)|*.zip", FileName = DefaultName() + ".zip", AddExtension = true, DefaultExt = ".zip" };
             if (dialog.ShowDialog(this) != true) return;
             try
             {
                 Mouse.OverrideCursor = Cursors.Wait;
                 ProjectTools.ExportBundle(assessment, dialog.FileName, review.IncludeWord, review.IncludeExcel);
-                status.Text = "Комплект сохранён: " + dialog.FileName;
+                status.Text = "Архив сохранён: " + dialog.FileName;
             }
-            catch (Exception ex) { ShowError("Не удалось сохранить комплект", ex); }
+            catch (Exception ex) { ShowError("Не удалось сохранить архив", ex); }
             finally { Mouse.OverrideCursor = null; }
         }
         bool SaveBundleFast(bool chooseNewPath = false)
@@ -605,7 +609,7 @@ namespace MaturityApp
             string path = chooseNewPath ? null : bundlePath;
             if (path == null)
             {
-                SaveFileDialog dialog = new SaveFileDialog { Title = "Сохранить комплект: проект + Word + Excel", Filter = "Комплект оценки (*.zip)|*.zip", FileName = DefaultName() + ".zip", AddExtension = true, DefaultExt = ".zip" };
+                SaveFileDialog dialog = new SaveFileDialog { Title = "Сохранить архив: оценка, Word и Excel", Filter = "Архив (*.zip)|*.zip", FileName = DefaultName() + ".zip", AddExtension = true, DefaultExt = ".zip" };
                 if (bundlePath != null) { dialog.InitialDirectory = Path.GetDirectoryName(bundlePath); dialog.FileName = Path.GetFileName(bundlePath); }
                 else if (projectPath != null) dialog.InitialDirectory = Path.GetDirectoryName(projectPath);
                 if (dialog.ShowDialog(this) != true) return false; path = dialog.FileName;
@@ -614,32 +618,11 @@ namespace MaturityApp
             {
                 Mouse.OverrideCursor = Cursors.Wait; saveTimer.Stop(); AutoSave();
                 ProjectTools.ExportBundle(assessment, path, true, true); bundlePath = path; if (projectPath == null) dirty = false; UpdateNumbers(); UpdateHeader();
-                status.Text = "Комплект сохранён: " + path + (Calc.Summary(assessment).Complete ? "" : " · предварительный результат");
+                status.Text = "Архив сохранён: " + path + (Calc.Summary(assessment).Complete ? "" : " · предварительный результат");
                 return true;
             }
-            catch (Exception ex) { ShowError("Не удалось сохранить комплект", ex); return false; }
+            catch (Exception ex) { ShowError("Не удалось сохранить архив", ex); return false; }
             finally { Mouse.OverrideCursor = null; }
-        }
-        void SaveProfile()
-        {
-            string name = "Реквизиты" + (assessment.OrganizationShort.Length > 0 ? " - " + assessment.OrganizationShort : assessment.Organization.Length > 0 ? " - " + assessment.Organization : "");
-            foreach (char ch in Path.GetInvalidFileNameChars()) name = name.Replace(ch, '_');
-            if (name.Length > 140) name = name.Substring(0, 140);
-            SaveFileDialog dialog = new SaveFileDialog { Title = "Сохранить реквизиты организации", Filter = "Реквизиты организации (*.org.json)|*.org.json", FileName = name + ".org.json", DefaultExt = ".org.json", AddExtension = true };
-            if (dialog.ShowDialog(this) != true) return;
-            try { ProjectTools.SaveProfile(assessment, dialog.FileName); status.Text = "Реквизиты сохранены: " + dialog.FileName; }
-            catch (Exception ex) { ShowError("Не удалось сохранить реквизиты", ex); }
-        }
-        void LoadProfile()
-        {
-            OpenFileDialog dialog = new OpenFileDialog { Title = "Загрузить реквизиты организации", Filter = "Реквизиты организации (*.org.json)|*.org.json|JSON (*.json)|*.json" };
-            if (dialog.ShowDialog(this) != true) return;
-            try
-            {
-                OrganizationProfile profile = ProjectTools.LoadProfile(dialog.FileName);
-                ProjectTools.ApplyProfile(assessment, profile); Changed(); ShowPage(); status.Text = "Реквизиты загружены · ответы и параметры оценки сохранены";
-            }
-            catch (Exception ex) { ShowError("Не удалось загрузить реквизиты", ex); }
         }
         void ShowError(string title, Exception ex) { MessageBox.Show(this, ex.Message, title, MessageBoxButton.OK, MessageBoxImage.Error); }
         public void RenderPreview(string targetPage, string path, int width = 1450, int height = 920)
@@ -667,7 +650,7 @@ namespace MaturityApp
         public bool IncludeWord = true, IncludeExcel = true, GoToSettings;
         public ExportReviewWindow(Assessment assessment, bool bundle)
         {
-            Title = bundle ? "Состав комплекта оценки" : "Проверка перед выгрузкой";
+            Title = bundle ? "Архив: оценка, Word и Excel" : "Проверка перед выгрузкой";
             Width = 690; MinWidth = 560; MinHeight = 420;
             Height = Math.Max(MinHeight, Math.Min(760, SystemParameters.WorkArea.Height - 48));
             WindowStartupLocation = WindowStartupLocation.CenterOwner; FontFamily = new FontFamily("Segoe UI"); Background = Theme.Paper;
@@ -682,7 +665,7 @@ namespace MaturityApp
             if (bundle)
             {
                 StackPanel files = new StackPanel(); files.Children.Add(Theme.Text("Состав архива", 15, null, true));
-                files.Children.Add(new CheckBox { Content = "Проект оценки (.uzi.json) — включён всегда", IsChecked = true, IsEnabled = false, Margin = new Thickness(0, 12, 0, 9) });
+                files.Children.Add(new CheckBox { Content = "Файл оценки — включён всегда (его можно открыть и продолжить работу)", IsChecked = true, IsEnabled = false, Margin = new Thickness(0, 12, 0, 9) });
                 CheckBox word = new CheckBox { Content = "Отчёт Word (.docx)", IsChecked = true, Margin = new Thickness(0, 0, 0, 9) }; word.Checked += (s, e) => IncludeWord = true; word.Unchecked += (s, e) => IncludeWord = false; files.Children.Add(word);
                 CheckBox excel = new CheckBox { Content = "Таблица Excel (.xlsx)", IsChecked = true }; excel.Checked += (s, e) => IncludeExcel = true; excel.Unchecked += (s, e) => IncludeExcel = false; files.Children.Add(excel);
                 Border filesCard = Theme.Card(files, new Thickness(16)); filesCard.Margin = new Thickness(0, 14, 0, 0); root.Children.Add(filesCard);
@@ -698,8 +681,8 @@ namespace MaturityApp
             }
             StackPanel buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 22, 0, 0) };
             buttons.Children.Add(Theme.Button("Отмена", () => { DialogResult = false; }));
-            buttons.Children.Add(Theme.Button("К параметрам", () => { GoToSettings = true; DialogResult = false; }));
-            buttons.Children.Add(Theme.Button(bundle ? "Выбрать файл…" : "Продолжить", () => { DialogResult = true; }, true)); Grid.SetRow(buttons, 1); frame.Children.Add(buttons);
+            buttons.Children.Add(Theme.Button("Вернуться к заполнению", () => { GoToSettings = true; DialogResult = false; }));
+            buttons.Children.Add(Theme.Button(bundle ? "Сохранить архив…" : "Продолжить", () => { DialogResult = true; }, true)); Grid.SetRow(buttons, 1); frame.Children.Add(buttons);
         }
         public void RenderPreview(string path)
         {

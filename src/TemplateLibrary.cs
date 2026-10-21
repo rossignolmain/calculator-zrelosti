@@ -14,13 +14,16 @@ namespace MaturityApp
         public DateTime Modified;
         public AnswerTemplate Template;   // full template (.answers.json)
         public SystemPassport Passport;   // legacy passport-only basis (.arm.json)
-        public bool IsValid { get { return Template != null || Passport != null; } }
+        public OrganizationProfile Profile; // organization requisites and people (.org.json)
+        public bool IsOrganization { get { return Path.EndsWith(TemplateLibrary.ProfileExtension, StringComparison.OrdinalIgnoreCase); } }
+        public bool IsValid { get { return Template != null || Passport != null || Profile != null; } }
         public string Summary
         {
             get
             {
                 if (!IsValid) return "Не читается: " + Error;
-                string parts = Template != null ? AnswerTemplates.PartsText(AnswerTemplates.PartsOf(Template)) : "только паспорт (основа АРМ)";
+                if (Profile != null) return "реквизиты, подписанты, участники: " + Profile.Participants.Length + " · " + Modified.ToString("dd.MM.yyyy HH:mm", CultureInfo.InvariantCulture);
+                string parts = Template != null ? AnswerTemplates.PartsText(AnswerTemplates.PartsOf(Template)) : "только описание объекта (файл прежней версии)";
                 string who = Template != null && Template.Author.Length > 0 ? " · " + Template.Author : "";
                 return parts + who + " · " + Modified.ToString("dd.MM.yyyy HH:mm", CultureInfo.InvariantCulture);
             }
@@ -34,7 +37,7 @@ namespace MaturityApp
     // new templates never collide because file names are made unique.
     public static class TemplateLibrary
     {
-        public const string TemplateExtension = ".answers.json", PassportExtension = ".arm.json", TrashFolder = "_Удалённые";
+        public const string TemplateExtension = ".answers.json", PassportExtension = ".arm.json", ProfileExtension = ".org.json", TrashFolder = "_Удалённые";
 
         public static string DataFolder { get { return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Данные"); } }
         public static string DefaultFolder { get { return Path.Combine(DataFolder, "Шаблоны оценок"); } }
@@ -69,13 +72,14 @@ namespace MaturityApp
             foreach (string path in Directory.GetFiles(folder, "*.json"))
             {
                 string file = System.IO.Path.GetFileName(path);
-                bool template = file.EndsWith(TemplateExtension, StringComparison.OrdinalIgnoreCase), arm = file.EndsWith(PassportExtension, StringComparison.OrdinalIgnoreCase);
-                if (!template && !arm) continue;
-                LibraryEntry e = new LibraryEntry { Path = path, Modified = File.GetLastWriteTime(path), Name = file.Substring(0, file.Length - (template ? TemplateExtension.Length : PassportExtension.Length)) };
+                string extension = new[] { TemplateExtension, PassportExtension, ProfileExtension }.FirstOrDefault(x => file.EndsWith(x, StringComparison.OrdinalIgnoreCase));
+                if (extension == null) continue;
+                LibraryEntry e = new LibraryEntry { Path = path, Modified = File.GetLastWriteTime(path), Name = file.Substring(0, file.Length - extension.Length) };
                 try
                 {
-                    if (template) { e.Template = AnswerTemplates.Load(path); if (e.Template.Name.Length > 0) e.Name = e.Template.Name; }
-                    else e.Passport = SystemPassports.LoadTemplate(path);
+                    if (extension == TemplateExtension) { e.Template = AnswerTemplates.Load(path); if (e.Template.Name.Length > 0) e.Name = e.Template.Name; }
+                    else if (extension == PassportExtension) e.Passport = SystemPassports.LoadTemplate(path);
+                    else e.Profile = ProjectTools.LoadProfile(path);
                 }
                 catch (Exception ex) { e.Error = ex.Message; }
                 entries.Add(e);
@@ -91,6 +95,19 @@ namespace MaturityApp
             AnswerTemplates.Save(t, path);
             return path;
         }
+        public static string SaveNewProfile(Assessment a, string name, string folder)
+        {
+            if (String.IsNullOrWhiteSpace(name)) throw new InvalidDataException("Укажите название профиля организации.");
+            Directory.CreateDirectory(folder);
+            string path = UniquePath(folder, SafeName(name), ProfileExtension);
+            ProjectTools.SaveProfile(a, path);
+            return path;
+        }
+        public static void OverwriteProfile(LibraryEntry entry, Assessment a)
+        {
+            if (entry == null || !entry.IsOrganization) throw new InvalidDataException("Выберите профиль организации.");
+            ProjectTools.SaveProfile(a, entry.Path);
+        }
         public static void Overwrite(LibraryEntry entry, AnswerTemplate t)
         {
             if (entry == null || entry.Template == null) throw new InvalidDataException("Заменить можно только шаблон оценки (.answers.json).");
@@ -99,12 +116,11 @@ namespace MaturityApp
         }
         public static string Rename(LibraryEntry entry, string name)
         {
-            if (entry == null || entry.Template == null) throw new InvalidDataException("Переименовать можно только шаблон оценки (.answers.json).");
+            if (entry == null || entry.Template == null && entry.Profile == null) throw new InvalidDataException("Этот файл нельзя переименовать.");
             if (String.IsNullOrWhiteSpace(name)) throw new InvalidDataException("Укажите новое название.");
             string folder = System.IO.Path.GetDirectoryName(entry.Path);
-            entry.Template.Name = name.Trim();
-            string target = UniquePath(folder, SafeName(name), TemplateExtension, entry.Path);
-            AnswerTemplates.Save(entry.Template, entry.Path);
+            string target = UniquePath(folder, SafeName(name), entry.Profile != null ? ProfileExtension : TemplateExtension, entry.Path);
+            if (entry.Template != null) { entry.Template.Name = name.Trim(); AnswerTemplates.Save(entry.Template, entry.Path); }
             if (!String.Equals(target, entry.Path, StringComparison.OrdinalIgnoreCase)) File.Move(entry.Path, target);
             return target;
         }

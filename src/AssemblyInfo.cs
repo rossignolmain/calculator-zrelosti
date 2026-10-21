@@ -3,5 +3,5 @@ using System.Reflection;
 [assembly: AssemblyDescription("Локальная оценка зрелости деятельности по защите информации. 21 направление, 8 критериев.")]
 [assembly: AssemblyProduct("Уровень зрелости · Узи")]
 [assembly: AssemblyCompany("")]
-[assembly: AssemblyVersion("1.6.0.0")]
-[assembly: AssemblyFileVersion("1.6.0.0")]
+[assembly: AssemblyVersion("1.7.0.0")]
+[assembly: AssemblyFileVersion("1.7.0.0")]

@@ -50,6 +50,66 @@ namespace MaturityApp
         public List<string> CriterionDecreases = new List<string>();
     }
 
+    // Owner and deadline of one plan row (item 35 н). Empty values fall back to the plan defaults.
+    public class PlanItem { public string Key = "", Responsible = "", Deadline = ""; }
+
+    // One protected object type inside the assessed scope, e.g. "ГИС, К3" or "ЗОКИИ, 2 категория".
+    public class ProtectionObject
+    {
+        public string Kind = "", Name = "", Document = "";
+        public int Level; // класс ГИС 1-3, уровень защищённости ПДн 1-4, категория значимости 1-3; 0 — не установлен
+    }
+
+    public class ObjectKind
+    {
+        public string Key, Text, LevelLabel, Requirement;
+        public string[] Levels; // index + 1 = Level
+        public ObjectKind(string key, string text, string levelLabel, string requirement, params string[] levels) { Key = key; Text = text; LevelLabel = levelLabel; Requirement = requirement; Levels = levels; }
+    }
+
+    public static class ObjectCatalog
+    {
+        public static readonly ObjectKind[] Kinds = {
+            new ObjectKind("gis", "Государственная информационная система (ГИС)", "Класс защищённости", "fstec117", "К1", "К2", "К3"),
+            new ObjectKind("ispdn", "Информационная система персональных данных (ИСПДн)", "Уровень защищённости ПДн", "fstec21", "УЗ-1", "УЗ-2", "УЗ-3", "УЗ-4"),
+            new ObjectKind("kii", "Значимый объект КИИ", "Категория значимости", "fstec239", "1 категория", "2 категория", "3 категория"),
+            new ObjectKind("asutp", "АСУ ТП", "Класс защищённости", "fstec31asutp", "К1", "К2", "К3"), // п. 11 Методики не называет АСУ ТП: класс не меняет цель
+            new ObjectKind("opk", "ИС управления производством ОПК", "", "fstec31opk"),
+            new ObjectKind("other", "Иная информационная система", "", null)
+        };
+        public static ObjectKind Find(string key) { return Kinds.FirstOrDefault(k => k.Key == key); }
+
+        // Item 11 of the methodology: recommended minimum target per object type and class.
+        public static int MinimumTarget(ProtectionObject o)
+        {
+            if (o.Level <= 0) return 1;
+            switch (o.Kind)
+            {
+                case "gis": return 4 - o.Level;                       // К1 → 3, К2 → 2, К3 → 1
+                case "ispdn": return o.Level >= 3 ? 1 : 4 - o.Level;  // УЗ-1 → 3, УЗ-2 → 2, УЗ-3/4 → 1
+                case "kii": return 4 - o.Level;                       // 1 → 3, 2 → 2, 3 → 1
+                default: return 1;
+            }
+        }
+        public static string Text(ProtectionObject o)
+        {
+            ObjectKind k = Find(o.Kind); if (k == null) return o.Kind;
+            string level = o.Level > 0 && o.Level <= k.Levels.Length ? ", " + k.Levels[o.Level - 1] : k.Levels.Length > 0 ? ", " + k.LevelLabel.ToLower() + " не установлен" : "";
+            return (o.Name.Length > 0 ? o.Name + " — " : "") + k.Text + level + (o.Document.Length > 0 ? " (" + o.Document + ")" : "");
+        }
+        // Category (= minimum target) follows the strictest object; matching requirements are ticked.
+        // Unticking a requirement afterwards is the user's decision and is kept until objects change.
+        public static void ApplyToAssessment(Assessment a)
+        {
+            if (a.Objects.Length == 0) return;
+            bool anyLevel = a.Objects.Any(o => o.Level > 0);
+            a.Category = anyLevel ? a.Objects.Max(o => MinimumTarget(o)) : 0;
+            foreach (DirectionAssessment d in a.Directions) d.Target = Math.Max(Math.Max(1, a.Category), d.Target);
+            string[] add = a.Objects.Select(o => Find(o.Kind).Requirement).Where(r => r != null).ToArray();
+            a.Requirements = ReportCatalog.Requirements.Where(r => add.Contains(r.Key) || a.Requirements.Contains(r.Key)).Select(r => r.Key).ToArray();
+        }
+    }
+
     public static class ReportCatalog
     {
         // Footnote 1 of the methodology: requirements the assessed activity follows (п. 35а).
@@ -64,9 +124,9 @@ namespace MaturityApp
         // Item 19, letters а-н: source data used for the assessment (п. 35е).
         public static readonly CatalogItem[] SourceData = {
             new CatalogItem("a", "Политика защиты информации"),
-            new CatalogItem("b", "ОРД о полномочиях и правах лиц, ответственных за защиту информации"),
-            new CatalogItem("v", "ОРД о полномочиях и правах подразделений"),
-            new CatalogItem("g", "Внутренние стандарты, регламенты и иные ОРД по защите информации и эксплуатации ИС"),
+            new CatalogItem("b", "Приказы и иные документы о полномочиях лиц, ответственных за защиту информации"),
+            new CatalogItem("v", "Приказы и иные документы о полномочиях подразделений"),
+            new CatalogItem("g", "Внутренние стандарты, регламенты и иные документы по защите информации и эксплуатации ИС"),
             new CatalogItem("d", "План мероприятий по совершенствованию защиты информации"),
             new CatalogItem("e", "Отчёты и протоколы по результатам мероприятий и мер по защите информации"),
             new CatalogItem("zh", "Результаты последней оценки уровня зрелости"),
@@ -92,7 +152,8 @@ namespace MaturityApp
             new CatalogItem("grc", "GRC-система"),
             new CatalogItem("soar", "Платформа оркестрации и реагирования (SOAR, SecOps)"),
             new CatalogItem("ea", "Инструмент проектирования корпоративной архитектуры (Enterprise Architecture Tools)"),
-            new CatalogItem("llm", "Языковая модель, адаптированная для работы с исходными данными")
+            new CatalogItem("llm", "Языковая модель, адаптированная для работы с исходными данными"),
+            new CatalogItem("other", "Иные инструментальные средства (сканеры, средства мониторинга и т. п. — укажите ниже)")
         };
 
         public static string RoleText(string role)
@@ -133,6 +194,28 @@ namespace MaturityApp
                 p.Name = p.Name ?? ""; p.Position = p.Position ?? ""; p.Organization = p.Organization ?? ""; p.Contact = p.Contact ?? "";
             }
             if (a.Previous != null) ValidatePrevious(a.Previous);
+            a.Objects = (a.Objects ?? new ProtectionObject[0]).Where(o => o != null).ToArray();
+            if (a.Objects.Length > 50) throw new InvalidDataException("Слишком много объектов защиты.");
+            foreach (ProtectionObject o in a.Objects)
+            {
+                ObjectKind k = ObjectCatalog.Find(o.Kind);
+                if (k == null) throw new InvalidDataException("Неизвестный тип объекта защиты.");
+                if (o.Level < 0 || o.Level > k.Levels.Length) throw new InvalidDataException("Некорректный класс или категория объекта защиты.");
+                o.Name = o.Name ?? ""; o.Document = o.Document ?? "";
+            }
+            a.PlanItems = (a.PlanItems ?? new PlanItem[0]).Where(x => x != null && !String.IsNullOrEmpty(x.Key)).ToArray();
+            foreach (PlanItem item in a.PlanItems) { item.Responsible = item.Responsible ?? ""; item.Deadline = item.Deadline ?? ""; }
+        }
+        // Rows of the improvement plan (п. 35 н): real measures only. Unanswered criteria are
+        // not measures; the P threshold matters only once a direction is fully answered.
+        public static DeficitRecord[] PlanRows(Assessment a, AssessmentAnalysis analysis)
+        {
+            return analysis.Deficits.Where(d => d.Type == "improve" || d.Type == "score" && Calc.Direction(a.Directions.First(x => x.Id == d.DirectionId)).Complete).ToArray();
+        }
+        public static PlanItem PlanFor(Assessment a, string key)
+        {
+            PlanItem item = a.PlanItems.FirstOrDefault(x => x.Key == key);
+            return new PlanItem { Key = key, Responsible = item != null && item.Responsible.Length > 0 ? item.Responsible : a.PlanResponsible, Deadline = item != null && item.Deadline.Length > 0 ? item.Deadline : a.PlanDeadline };
         }
 
         static string[] Known(string[] keys, CatalogItem[] catalog, string what)
@@ -224,13 +307,15 @@ namespace MaturityApp
         public static string[] Missing(Assessment a)
         {
             List<string> m = new List<string>();
+            if (a.Objects == null || a.Objects.Length == 0) m.Add("п. 35а: не указан тип объекта защиты (ГИС, ИСПДн, ЗОКИИ и т. п.) и его класс или категория.");
             if (a.Requirements == null || a.Requirements.Length == 0) m.Add("п. 35а: не отмечены действующие требования по защите информации.");
             if (String.IsNullOrWhiteSpace(a.AssessorOrganization) || String.IsNullOrWhiteSpace(a.AssessorContact)) m.Add("п. 35в: не указаны организация или контакты лица, проводившего оценку.");
             if (a.Participants == null || !a.Participants.Any(p => p.Role != "assessor" && !String.IsNullOrWhiteSpace(p.Name))) m.Add("п. 35г: не указаны лица, участвовавшие в оценке и предоставлявшие исходные данные.");
             if (a.SourceData == null || a.SourceData.Length == 0) m.Add("п. 35е: не отмечены исходные данные.");
             if (a.Methods == null || a.Methods.Length == 0) m.Add("п. 35ж: не отмечены методы оценки.");
             if (a.Instruments == null || a.Instruments.Length == 0) m.Add("п. 35ж: не отмечены инструменты оценки.");
-            if (String.IsNullOrWhiteSpace(a.PlanResponsible) || String.IsNullOrWhiteSpace(a.PlanDeadline)) m.Add("п. 35н: не указаны ответственный и срок выполнения мероприятий.");
+            int unassigned = PlanRows(a, Analysis.Build(a)).Count(d => { PlanItem p = PlanFor(a, d.Key); return p.Responsible.Trim().Length == 0 || p.Deadline.Trim().Length == 0; });
+            if (unassigned > 0) m.Add("п. 35н: у мероприятий плана не указаны ответственный или срок (строк: " + unassigned + ").");
             if (a.AssessmentKind == "external" && String.IsNullOrWhiteSpace(a.ExternalLicense)) m.Add("п. 6: для внешней оценки не указана лицензия организации.");
             return m.ToArray();
         }

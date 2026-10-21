@@ -37,6 +37,8 @@ namespace MaturityApp
         public string ToolsNote = "", SourceDataNote = "";
         public PreviousResult Previous = null;
         public string PlanResponsible = "", PlanDeadline = "";
+        public PlanItem[] PlanItems = new PlanItem[0];
+        public ProtectionObject[] Objects = new ProtectionObject[0];
         public static Assessment Create()
         {
             Assessment a = new Assessment();
@@ -90,7 +92,7 @@ namespace MaturityApp
                 if (met) { r.Level = level; break; }
             }
             r.Gap = Math.Max(0, d.Target - r.Level);
-            if (!r.Complete) r.Recommendations.Add("Заполните оставшиеся критерии: " + (8 - r.Answered) + ". До этого результат предварительный.");
+            if (!r.Complete) r.Recommendations.Add("Заполните оставшиеся виды требований: " + (8 - r.Answered) + ". До этого результат предварительный.");
             if (r.Level < d.Target)
             {
                 double[] need = Minima[d.Target - 1];
@@ -138,9 +140,9 @@ namespace MaturityApp
         }
         public static void Validate(Assessment a)
         {
-            if (a == null || a.Version != 1) throw new InvalidDataException("Неподдерживаемый формат проекта. Нужен файл оценки версии 1.");
+            if (a == null || a.Version != 1) throw new InvalidDataException("Неподдерживаемый формат файла оценки. Нужен файл оценки версии 1.");
             if (a.Category < 0 || a.Category > 3) throw new InvalidDataException("Некорректная категория системы.");
-            if (a.Directions == null || a.Directions.Length != 21) throw new InvalidDataException("В проекте должны быть данные по 21 направлению.");
+            if (a.Directions == null || a.Directions.Length != 21) throw new InvalidDataException("В файле оценки должны быть данные по 21 направлению.");
             DateTime date;
             if (!DateTime.TryParseExact(a.Date, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out date)) throw new InvalidDataException("Некорректная дата оценки.");
             SystemPassports.Validate(a.Passport);
@@ -151,7 +153,7 @@ namespace MaturityApp
             {
                 if (d == null || d.Id < 1 || d.Id > 21 || !ids.Add(d.Id)) throw new InvalidDataException("Некорректные номера направлений.");
                 if (d.Target < minimum || d.Target > 4) throw new InvalidDataException("Целевой уровень должен находиться между минимумом категории и 4.");
-                if (d.Answers == null || d.Answers.Length != 8) throw new InvalidDataException("В направлении должно быть 8 критериев.");
+                if (d.Answers == null || d.Answers.Length != 8) throw new InvalidDataException("В направлении должно быть 8 видов требований.");
                 for (int j = 0; j < 8; j++)
                     if (d.Answers[j].HasValue && !Data.Criteria[j].Options.Any(o => Math.Abs(o.Value - d.Answers[j].Value) < 1e-10)) throw new InvalidDataException("Недопустимое значение ответа.");
                 d.Evidence = d.Evidence ?? "";
@@ -165,7 +167,7 @@ namespace MaturityApp
         }
         public static Assessment Load(string path)
         {
-            if (new FileInfo(path).Length > 4 * 1024 * 1024) throw new InvalidDataException("Файл слишком большой для проекта оценки.");
+            if (new FileInfo(path).Length > 4 * 1024 * 1024) throw new InvalidDataException("Файл слишком большой для файла оценки.");
             return Parse(File.ReadAllText(path, Encoding.UTF8));
         }
         public static void Save(Assessment a, string path)

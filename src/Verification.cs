@@ -490,10 +490,10 @@ namespace MaturityApp
                 using (ZipArchive zip = ZipFile.OpenRead(path))
                 {
                     Check(zip.Entries.Count == 4, "Full bundle has project Word Excel and manifest");
-                    Check(zip.GetEntry("01 Проект.uzi.json") != null && zip.GetEntry("02 Отчёт.docx") != null && zip.GetEntry("03 Таблица.xlsx") != null && zip.GetEntry("Состав комплекта.txt") != null, "Bundle entry names use the requested Unicode names");
-                    Assessment bundled = Store.Parse(ReadZipText(zip.GetEntry("01 Проект.uzi.json")));
+                    Check(zip.GetEntry("01 Оценка.uzi.json") != null && zip.GetEntry("02 Отчёт.docx") != null && zip.GetEntry("03 Таблица.xlsx") != null && zip.GetEntry("Состав архива.txt") != null, "Bundle entry names use the requested Unicode names");
+                    Assessment bundled = Store.Parse(ReadZipText(zip.GetEntry("01 Оценка.uzi.json")));
                     Check(Store.Serialize(bundled) == original, "Bundled JSON is the exact validated assessment snapshot");
-                    string manifest = ReadZipText(zip.GetEntry("Состав комплекта.txt"));
+                    string manifest = ReadZipText(zip.GetEntry("Состав архива.txt"));
                     Check(manifest.Contains(a.Organization) && manifest.Contains(a.SystemName) && manifest.Contains(a.DocumentNumber) && manifest.Contains(a.ApproverName) && manifest.Contains(Data.SourceUrl), "Manifest includes metadata and source");
                     Check(manifest.Contains("ПРЕДВАРИТЕЛЬНЫЙ") && manifest.Contains("не заполнено 1 из 8"), "Manifest reports preliminary status and preflight omissions");
                     ValidateNestedReport(zip.GetEntry("02 Отчёт.docx"), "word/document.xml", a.Organization);
@@ -517,8 +517,8 @@ namespace MaturityApp
                     {
                         Check(zip.Entries.Count == 2 + (word ? 1 : 0) + (excel ? 1 : 0), "Optional flags determine entry count");
                         Check((zip.GetEntry("02 Отчёт.docx") != null) == word && (zip.GetEntry("03 Таблица.xlsx") != null) == excel, "Optional flags determine report membership");
-                        Check(ReadZipText(zip.GetEntry("Состав комплекта.txt")).Contains("Заполнение критериев: полное"), "Complete bundle manifest reports full completion");
-                        Check(Calc.Summary(Store.Parse(ReadZipText(zip.GetEntry("01 Проект.uzi.json")))).Average == 4, "Project is always included and loadable");
+                        Check(ReadZipText(zip.GetEntry("Состав архива.txt")).Contains("Заполнение видов требований: полное"), "Complete bundle manifest reports full completion");
+                        Check(Calc.Summary(Store.Parse(ReadZipText(zip.GetEntry("01 Оценка.uzi.json")))).Average == 4, "Project is always included and loadable");
                     }
                     report.generatedFiles.Add(path);
                 }

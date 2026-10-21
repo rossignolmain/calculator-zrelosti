@@ -21,10 +21,10 @@ namespace MaturityApp
             StackPanel top = new StackPanel();
             Grid info = new Grid(); info.ColumnDefinitions.Add(new ColumnDefinition()); info.ColumnDefinitions.Add(new ColumnDefinition()); info.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(260) });
             AddQuickField(info, 0, "Организация", assessment.Organization, value => assessment.Organization = value);
-            AddQuickField(info, 1, "Система / объект оценки", assessment.SystemName, value => assessment.SystemName = value);
-            StackPanel categoryField = new StackPanel(); categoryField.Children.Add(Theme.Text("Категория системы", 11, Theme.Muted));
+            AddQuickField(info, 1, "Объект оценки", assessment.SystemName, value => assessment.SystemName = value);
+            StackPanel categoryField = new StackPanel(); categoryField.Children.Add(Theme.Text("Минимальный целевой уровень (п. 11 Методики)", 11, Theme.Muted));
             ComboBox category = new ComboBox { Margin = new Thickness(0, 6, 0, 0), Height = 34, FontSize = 12, Padding = new Thickness(6, 4, 6, 4), ToolTip = "Категория задаёт минимальную цель. Её смена устанавливает новую цель для всех направлений; ответы сохраняются." };
-            category.Items.Add("Не знаю класс · цель 1"); category.Items.Add("ГИС К3 / УЗ3–4 / КИИ3 · цель 1"); category.Items.Add("ГИС К2 / УЗ2 / КИИ2 · цель 2"); category.Items.Add("ГИС К1 / УЗ1 / КИИ1 · цель 3"); category.SelectedIndex = assessment.Category;
+            category.Items.Add("Класс не определён — 1"); category.Items.Add("1 — ГИС К3, УЗ-3/4, ЗОКИИ 3 кат."); category.Items.Add("2 — ГИС К2, УЗ-2, ЗОКИИ 2 кат."); category.Items.Add("3 — ГИС К1, УЗ-1, ЗОКИИ 1 кат."); category.SelectedIndex = assessment.Category;
             category.SelectionChanged += (s, e) =>
             {
                 if (building || category.SelectedIndex < 0) return;
@@ -37,15 +37,16 @@ namespace MaturityApp
                 }
                 building = false; Changed(); UpdateNumbers();
             };
+            if (assessment.Objects.Length > 0) { category.IsEnabled = false; category.ToolTip = "Определяется типом объекта защиты на вкладке «Объект оценки» (п. 11 Методики, по самому строгому)."; }
             categoryField.Children.Add(category); Grid.SetColumn(categoryField, 2); info.Children.Add(categoryField);
             top.Children.Add(Theme.Card(info, new Thickness(14, 11, 14, 12)));
             WrapPanel tools = new WrapPanel { Margin = new Thickness(0, 10, 0, 0) };
-            Button library = Theme.Button("Библиотека шаблонов…", OpenLibrary); library.ToolTip = "Подставить шаблон в эту оценку или сохранить её как новый шаблон. Шаблонов может быть сколько угодно; папку можно сделать общей."; tools.Children.Add(library);
+            Button library = Theme.Button("Шаблоны…", OpenLibrary); library.ToolTip = "Подставить шаблон в эту оценку или сохранить её как новый шаблон. Шаблонов может быть сколько угодно; папку можно сделать общей."; tools.Children.Add(library);
             int[] inapplicable = QuickInput.PassportInapplicable(assessment.Passport).Where(id => assessment.Directions[id - 1].Included).ToArray();
             if (inapplicable.Length > 0)
             {
-                Button exclude = Theme.Button("Исключить по паспорту: " + String.Join(", ", inapplicable), () => ExcludeByPassport(inapplicable));
-                exclude.ToolTip = "В паспорте указано, что технология не используется:\n" + String.Join("\n", inapplicable.Select(id => id + ". " + Data.DirectionNames[id - 1])) + "\n\nОтветы сохранятся; вернуть направление можно галочкой в таблице.";
+                Button exclude = Theme.Button("Исключить неприменимые направления: " + String.Join(", ", inapplicable), () => ExcludeByPassport(inapplicable));
+                exclude.ToolTip = "В описании объекта указано, что технология не применяется (п. 13 Методики):\n" + String.Join("\n", inapplicable.Select(id => id + ". " + Data.DirectionNames[id - 1])) + "\n\nОтветы сохранятся; вернуть направление можно галочкой в таблице.";
                 tools.Children.Add(exclude);
             }
             foreach (Button b in tools.Children.OfType<Button>()) { b.Padding = new Thickness(12, 6, 12, 6); b.FontSize = 12; }
@@ -85,7 +86,7 @@ namespace MaturityApp
             AddMatrixHeader(headers, 0, "✓", "Учитывать направление в расчёте"); AddMatrixHeader(headers, 1, "Направление · нажмите для подробностей", "Полная анкета, пояснения и подтверждающие материалы");
             for (int j = 0; j < 8; j++)
             {
-                string name = new[] { "Документы", "Выполнение", "Инструменты", "Квалификация", "Контроль", "Обучение", "Внешний\nаудит", "Улучшение" }[j];
+                string name = new[] { "Документи-\nрование", "Выполнение", "Инстру-\nменты", "Квалифи-\nкация", "Контроль", "Обучение", "Внешний\nаудит", "Актуали-\nзация" }[j];
                 AddMatrixHeader(headers, j + 2, name, Data.Criteria[j].Name + "\n" + Data.Criteria[j].Description + "\n\n" + String.Join("\n\n", Data.Criteria[j].Options.Select(o => Calc.F(o.Value) + " — " + o.Text)));
             }
             AddMatrixHeader(headers, 10, "Уровень", "Текущий уровень и число ответов в направлении"); AddMatrixHeader(headers, 11, "Цель", "Целевой уровень направления"); table.Children.Add(headers);
@@ -144,7 +145,7 @@ namespace MaturityApp
         void AddMatrixHeader(Grid grid, int col, string text, string tooltip)
         {
             TextBlock title = Theme.Text(text, 11, Theme.Muted, true); title.TextAlignment = col == 1 ? TextAlignment.Left : TextAlignment.Center;
-            Border cell = new Border { Child = title, Padding = new Thickness(4, 11, 4, 11), ToolTip = new TextBlock { Text = tooltip + (col >= 2 && col <= 9 ? "\n\nНажмите заголовок для массового заполнения этого критерия." : ""), MaxWidth = 480, TextWrapping = TextWrapping.Wrap } };
+            Border cell = new Border { Child = title, Padding = new Thickness(4, 11, 4, 11), ToolTip = new TextBlock { Text = tooltip + (col >= 2 && col <= 9 ? "\n\nНажмите заголовок для массового заполнения этого вида требования." : ""), MaxWidth = 480, TextWrapping = TextWrapping.Wrap } };
             if (col >= 2 && col <= 9) { int criterion = col - 2; cell.Cursor = Cursors.Hand; cell.MouseLeftButtonUp += (s, e) => { SelectMassCriterion(criterion); if (massExpander != null) massExpander.IsExpanded = true; }; }
             Grid.SetColumn(cell, col); grid.Children.Add(cell);
         }
@@ -154,7 +155,7 @@ namespace MaturityApp
             if (changes.Count == 0) { status.Text = "Общий ответ уже стоит во всех подходящих ячейках. Отличающиеся направления не изменены."; UpdateNumbers(); return; }
             copiedAnswers = changes; Changed(); UpdateNumbers();
             int kept = assessment.Directions.Count(d => d.Included && d.Answers[criterion].HasValue && Math.Abs(d.Answers[criterion].Value - value) > 1e-10);
-            status.Text = Data.Criteria[criterion].Name + " = " + Calc.F(value) + ": заполнено " + changes.Count + " яч." + (kept > 0 ? " Отличия сохранены: " + kept + "." : "") + " Действие можно отменить.";
+            status.Text = Data.Criteria[criterion].Name + " = " + Calc.F(value) + ": заполнено " + changes.Count + " ячеек" + (kept > 0 ? " Отличия сохранены: " + kept + "." : "") + " Действие можно отменить.";
         }
         void ExcludeByPassport(int[] ids)
         {
@@ -164,17 +165,18 @@ namespace MaturityApp
                 if (String.IsNullOrWhiteSpace(d.Evidence)) d.Evidence = PassportExclusionReason(id);
             }
             Changed(); ShowPage();
-            status.Text = "Исключены по паспорту: " + String.Join(", ", ids) + ". Основание по п. 13 Методики записано в материалы направления; ответы сохранены.";
+            status.Text = "Исключены неприменимые направления: " + String.Join(", ", ids) + ". Основание по п. 13 Методики записано в материалы направления; ответы сохранены.";
         }
-        void OpenLibrary()
+        void OpenLibrary() { OpenLibrary(false); }
+        void OpenLibrary(bool organizations)
         {
-            LibraryWindow window = new LibraryWindow(assessment, () => { copiedAnswers = null; Changed(); ShowPage(); }) { Owner = this };
+            LibraryWindow window = new LibraryWindow(assessment, () => { copiedAnswers = null; Changed(); ShowPage(); }, organizations) { Owner = this };
             window.ShowDialog();
         }
         static string PassportExclusionReason(int id)
         {
             string technology = id == 8 ? "мобильные устройства" : id == 9 ? "удалённый доступ (удалённое администрирование)" : id == 10 ? "беспроводной доступ (Wi-Fi)" : id == 13 ? "собственная разработка программного обеспечения" : "технологии искусственного интеллекта";
-            return "Исключено из области оценки по п. 13 Методики: в объекте не применяются " + technology + " (паспорт объекта).";
+            return "Исключено из области оценки по п. 13 Методики: в объекте не применяются " + technology + " (описание объекта).";
         }
         void ForgetCopiedAnswer(int directionId, int criterion)
         {

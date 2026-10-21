@@ -63,17 +63,13 @@ namespace MaturityApp
             panel.Children.Add(Section("Результаты предыдущей оценки (п. 33, п. 35 д)"));
             previousText = Theme.Text("", 12); panel.Children.Add(previousText); RefreshPrevious();
             WrapPanel previousButtons = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
-            previousButtons.Children.Add(Small(Theme.Button("Загрузить из прежнего проекта или комплекта…", LoadPrevious, true)));
+            previousButtons.Children.Add(Small(Theme.Button("Загрузить прежнюю оценку или архив…", LoadPrevious, true)));
             previousButtons.Children.Add(Small(Theme.Button("Ввести вручную…", EnterPreviousManually)));
             previousButtons.Children.Add(Small(Theme.Button("Предыдущей оценки не было", () => { assessment.Previous = null; Changed(); RefreshPrevious(); RefreshReportMissing(); })));
             panel.Children.Add(previousButtons);
 
-            panel.Children.Add(Section("Мероприятия плана: ответственный и срок (п. 35 н)"));
-            Grid plan = new Grid(); plan.ColumnDefinitions.Add(new ColumnDefinition()); plan.ColumnDefinitions.Add(new ColumnDefinition());
-            AddField(plan, 0, 0, "Ответственный (подразделение или работник)", assessment.PlanResponsible, value => { assessment.PlanResponsible = value; ReportChanged(); });
-            AddField(plan, 0, 1, "Срок выполнения (например, «до 31.12.2027»)", assessment.PlanDeadline, value => { assessment.PlanDeadline = value; ReportChanged(); });
-            panel.Children.Add(plan);
-            panel.Children.Add(Theme.Text("Значения подставляются во все строки плана в Word и Excel; отдельные строки можно уточнить в Excel.", 11, Theme.Muted));
+            panel.Children.Add(Section("Ответственные и сроки мероприятий (п. 35 н)"));
+            Button toPlan = Small(Theme.Button("Перейти к плану улучшений", () => { page = "analysis"; ShowPage(); })); toPlan.HorizontalAlignment = HorizontalAlignment.Left; panel.Children.Add(toPlan);
 
             Border card = Theme.Card(panel); card.Margin = new Thickness(0, 18, 0, 0); body.Children.Add(card);
             RefreshReportMissing();
@@ -155,7 +151,7 @@ namespace MaturityApp
         }
         void LoadPrevious()
         {
-            OpenFileDialog dialog = new OpenFileDialog { Title = "Предыдущая оценка этого объекта", Filter = "Проект или комплект (*.uzi.json;*.zip)|*.uzi.json;*.zip|Все файлы (*.*)|*.*" };
+            OpenFileDialog dialog = new OpenFileDialog { Title = "Предыдущая оценка этого объекта", Filter = "Оценка или архив (*.uzi.json;*.zip)|*.uzi.json;*.zip|Все файлы (*.*)|*.*" };
             if (dialog.ShowDialog(this) != true) return;
             try { ApplyPrevious(ProjectTools.LoadAssessmentFile(dialog.FileName), Path.GetFileName(dialog.FileName)); }
             catch (Exception ex) { ShowError("Не удалось загрузить предыдущую оценку", ex); }

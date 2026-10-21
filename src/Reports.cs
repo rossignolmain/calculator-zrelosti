@@ -48,13 +48,13 @@ namespace MaturityApp
             if (a == null) throw new ArgumentNullException("a");
             Summary summary = Calc.Summary(a);
             AssessmentAnalysis analysis = Analysis.Build(a);
-            string[] names = { "Сводка", "Сведения по п. 35", "Dij и Pзн", "Ответы", "Рекомендации", "Профиль критериев", "План улучшений", "Общие дефициты" };
-            string[] sheets = { SummarySheet(a, summary), ReportInfoSheet(a, summary), DijSheet(a), AnswersSheet(a), RecommendationsSheet(a), CriterionProfileSheet(analysis), DeficitPlanSheet(analysis, a.PlanResponsible, a.PlanDeadline), GroupedActionsSheet(analysis) };
+            string[] names = { "Сводка", "Сведения по п. 35", "Dij и Pзн", "Ответы", "Рекомендации", "Профиль требований", "План улучшений", "Общие дефициты" };
+            string[] sheets = { SummarySheet(a, summary), ReportInfoSheet(a, summary), DijSheet(a), AnswersSheet(a), RecommendationsSheet(a), CriterionProfileSheet(analysis), DeficitPlanSheet(analysis, a), GroupedActionsSheet(analysis) };
             if (a.Passport != null)
             {
                 Array.Resize(ref names, names.Length + 1);
                 Array.Resize(ref sheets, sheets.Length + 1);
-                names[names.Length - 1] = "Паспорт объекта";
+                names[names.Length - 1] = "Описание объекта";
                 sheets[sheets.Length - 1] = PassportSheet(a);
             }
             AtomicWrite(path, delegate(Stream output)
@@ -159,7 +159,8 @@ namespace MaturityApp
             if (!String.IsNullOrWhiteSpace(a.OrganizationAddress)) b.Append(TableRow(new string[] { "Адрес", a.OrganizationAddress }, false));
             if (!String.IsNullOrWhiteSpace(a.City)) b.Append(TableRow(new string[] { "Город", a.City }, false));
             b.Append(TableRow(new string[] { "Объект (область) оценки", Empty(a.SystemName) }, false));
-            b.Append(TableRow(new string[] { "Класс / уровень / категория", CategoryLongText(a.Category) }, false));
+            foreach (ProtectionObject o in a.Objects) b.Append(TableRow(new string[] { "Тип объекта защиты", ObjectCatalog.Text(o) }, false));
+            b.Append(TableRow(new string[] { "Рекомендуемый минимальный целевой уровень (п. 11)", CategoryLongText(a.Category) }, false));
             b.Append("</w:tbl>");
             b.Append(P("Действующие требования по защите информации (обеспечению безопасности значимых объектов КИИ)", "Heading2"));
             AppendList(b, ReportCatalog.Texts(ReportCatalog.Requirements, a.Requirements), "Не указаны.");
@@ -360,16 +361,17 @@ namespace MaturityApp
         }
         private static void AppendPlanWord(StringBuilder b, Assessment a, AssessmentAnalysis analysis)
         {
-            b.Append(P("Мероприятия сформированы по видам требований, не обеспечивающим целевой уровень (таблица 3). «Оценить» — вид требования не оценён; «Улучшить» — выполнить условие и подтвердить результат.", "Small"));
-            if (analysis.Deficits.Length == 0) { b.Append(P(analysis.HasScope ? "Мероприятия по достижению целевых уровней не требуются. По п. 35 Методики при достижении целей определяются новые целевые уровни." : "Нет включённых направлений.", null)); return; }
-            string responsible = String.IsNullOrWhiteSpace(a.PlanResponsible) ? "____________" : a.PlanResponsible;
-            string deadline = String.IsNullOrWhiteSpace(a.PlanDeadline) ? "____________" : a.PlanDeadline;
+            b.Append(P("Мероприятия сформированы по видам требований, не обеспечивающим целевой уровень (таблица 3 Методики).", "Small"));
+            int unanswered = analysis.Deficits.Count(d => d.Type == "assess");
+            if (unanswered > 0) b.Append(P("Не оценено видов требований: " + unanswered + ". До их оценки перечень мероприятий неполный.", "Warning"));
+            DeficitRecord[] rows = ReportFacts.PlanRows(a, analysis);
+            if (rows.Length == 0) { b.Append(P(!analysis.HasScope ? "Нет включённых направлений." : unanswered > 0 ? "По оценённым видам требований мероприятий не требуется." : "Мероприятия по достижению целевых уровней не требуются. При достижении целей определяются новые целевые уровни.", null)); return; }
             b.Append(TableStart(new int[] { 420, 2300, 3700, 1100, 1250, 830 }));
             b.Append(TableRow(new string[] { "№", "Направление и вид требования", "Мероприятие", "Сейчас / требуется", "Ответственный", "Срок" }, true));
-            for (int i = 0; i < analysis.Deficits.Length; i++)
+            for (int i = 0; i < rows.Length; i++)
             {
-                DeficitRecord d = analysis.Deficits[i];
-                b.Append(TableRow(new string[] { (i + 1).ToString(Inv), d.DirectionId + ". " + d.DirectionName + "\n" + d.CriterionName + "\n" + ActionLabel(d.Type), ConditionAndAction(d.ConditionText, d.Action), NullableNumber(d.Current) + " / " + NullableNumber(d.Required), responsible, deadline }, false));
+                DeficitRecord d = rows[i]; PlanItem plan = ReportFacts.PlanFor(a, d.Key);
+                b.Append(TableRow(new string[] { (i + 1).ToString(Inv), d.DirectionId + ". " + d.DirectionName + "\n" + d.CriterionName + "\n" + ActionLabel(d.Type), ConditionAndAction(d.ConditionText, d.Action), NullableNumber(d.Current) + " / " + NullableNumber(d.Required), plan.Responsible.Length > 0 ? plan.Responsible : "____________", plan.Deadline.Length > 0 ? plan.Deadline : "____________" }, false));
             }
             b.Append("</w:tbl>");
         }
@@ -384,93 +386,88 @@ namespace MaturityApp
 
         private static void AppendPassportWord(StringBuilder b, Assessment a)
         {
-            SystemPassport p = a.Passport;
-            b.Append(P("Описание объекта и состава", "Heading2"));
-            b.Append(P(SystemPassports.Description(p), null));
-            b.Append(P("Основа конфигурации: " + SystemPassports.TemplateName(p) + ". Параметры ниже отражают введённые сведения об объекте. Они не определяют оценки зрелости, категорию или класс защищённости.", "Small"));
-            b.Append(TableStart(new int[] { 3600, 5900 }));
-            b.Append(TableRow(new string[] { "Характеристика", "Сведения" }, true));
-            foreach (KeyValuePair<string, string> fact in PassportFacts(p))
-                b.Append(TableRow(new string[] { fact.Key, fact.Value }, false));
-            b.Append("</w:tbl>");
-            b.Append(P("Состав оборудования", "Heading3"));
-            b.Append(TableStart(new int[] { 2400, 1000, 6100 }));
-            b.Append(TableRow(new string[] { "Компонент", "Количество", "Назначение" }, true));
-            foreach (SystemComponent component in SystemPassports.Components(p))
-                b.Append(TableRow(new string[] { component.Name, component.Count.ToString(Inv), component.Purpose }, false));
-            b.Append("</w:tbl>");
-            b.Append(P("Текстовая схема подключения", "Heading3"));
-            b.Append(P(SystemPassports.Topology(p), null));
-            AppendPassportUnknownWord(b, p);
-            if (!String.IsNullOrWhiteSpace(p.Notes))
-            {
-                b.Append(P("Примечания к объекту", "Heading3"));
-                b.Append(P(p.Notes, null));
-            }
-        }
-
-        private static void AppendPassportUnknownWord(StringBuilder b, SystemPassport p)
-        {
-            b.Append(P("Неуточнённые характеристики", "Heading3"));
-            string[] unknown = SystemPassports.UnknownFields(p);
-            if (unknown.Length == 0) b.Append(P("Все характеристики паспорта уточнены.", null));
+            SystemPassport p = SystemPassports.Snapshot(a.Passport);
+            b.Append(P("Описание объекта", "Heading2"));
+            b.Append(P("Сведения введены оценщиком и не определяют оценки зрелости, класс или категорию.", "Small"));
+            b.Append(P("Состав", "Heading3"));
+            if (p.Components.Length == 0) b.Append(P("Не указан.", "Warning"));
             else
             {
-                b.Append(P("Отсутствие сведений означает, что характеристика требует уточнения. Оно не означает, что технология отсутствует.", "Small"));
-                for (int i = 0; i < unknown.Length; i++) b.Append(P((i + 1) + ". " + unknown[i], null));
+                b.Append(TableStart(new int[] { 3400, 1100, 5000 }));
+                b.Append(TableRow(new string[] { "Компонент", "Количество", "Примечание" }, true));
+                foreach (PassportComponent c in p.Components) b.Append(TableRow(new string[] { Empty(c.Kind), c.Count.ToString(Inv), c.Note }, false));
+                b.Append("</w:tbl>");
             }
+            b.Append(P("Внешние взаимодействия", "Heading3"));
+            if (p.NoConnections) b.Append(P("Внешних взаимодействий нет.", null));
+            else if (p.Connections.Length == 0) b.Append(P("Не указаны.", "Warning"));
+            else
+            {
+                b.Append(TableStart(new int[] { 3000, 2000, 2200, 2300 }));
+                b.Append(TableRow(new string[] { "Система / сеть", "Способ", "Канал", "Примечание" }, true));
+                foreach (PassportConnection c in p.Connections) b.Append(TableRow(new string[] { Empty(c.System), SystemPassports.Label(SystemPassports.Methods, c.Method), SystemPassports.Label(SystemPassports.Channels, c.Channel), c.Note }, false));
+                b.Append("</w:tbl>");
+            }
+            b.Append(P("Средства защиты информации", "Heading3"));
+            if (p.Tools.Length == 0) b.Append(P("Не указаны.", "Warning"));
+            else
+            {
+                b.Append(TableStart(new int[] { 2900, 3300, 3300 }));
+                b.Append(TableRow(new string[] { "Класс", "Средство", "Примечание (версия, сертификат)" }, true));
+                foreach (PassportTool t in p.Tools) b.Append(TableRow(new string[] { SystemPassports.Label(SystemPassports.ToolClasses, t.Class), Empty(t.Product), t.Note }, false));
+                b.Append("</w:tbl>");
+            }
+            b.Append(P("Применяемые технологии", "Heading3"));
+            b.Append(TableStart(new int[] { 5000, 4500 }));
+            b.Append(TableRow(new string[] { "Технология", "Применяется" }, true));
+            foreach (KeyValuePair<string, string> fact in PassportFacts(p)) b.Append(TableRow(new string[] { fact.Key, fact.Value }, false));
+            b.Append("</w:tbl>");
+            string[] unknown = SystemPassports.UnknownFields(p);
+            if (unknown.Length > 0) b.Append(P("Не уточнено: " + String.Join("; ", unknown) + ". Отсутствие сведений не означает отсутствия технологии.", "Small"));
+            if (!String.IsNullOrWhiteSpace(p.Notes)) { b.Append(P("Особенности объекта", "Heading3")); b.Append(P(p.Notes, null)); }
         }
 
         private static KeyValuePair<string, string>[] PassportFacts(SystemPassport p)
         {
             return new KeyValuePair<string, string>[] {
-                new KeyValuePair<string, string>("Подключаемая система", Empty(p.ExternalSystem)),
-                new KeyValuePair<string, string>("Способ работы", SystemPassports.ConnectionText(p.Connection)),
-                new KeyValuePair<string, string>("Канал подключения", SystemPassports.ChannelText(p.Channel)),
-                new KeyValuePair<string, string>("Домен", SystemPassports.BooleanText(p.Domain)),
+                new KeyValuePair<string, string>("Доменная инфраструктура", SystemPassports.BooleanText(p.Domain)),
                 new KeyValuePair<string, string>("Доступ в интернет", SystemPassports.BooleanText(p.Internet)),
-                new KeyValuePair<string, string>("Беспроводная сеть (Wi-Fi)", SystemPassports.BooleanText(p.Wireless)),
+                new KeyValuePair<string, string>("Беспроводной доступ (Wi-Fi)", SystemPassports.BooleanText(p.Wireless)),
                 new KeyValuePair<string, string>("Мобильные устройства", SystemPassports.BooleanText(p.Mobile)),
-                new KeyValuePair<string, string>("Удалённое администрирование", SystemPassports.BooleanText(p.RemoteAdministration)),
+                new KeyValuePair<string, string>("Удалённый доступ (администрирование, подрядчики, работники)", SystemPassports.BooleanText(p.RemoteAdministration)),
                 new KeyValuePair<string, string>("Собственная разработка ПО", SystemPassports.BooleanText(p.OwnDevelopment)),
-                new KeyValuePair<string, string>("Искусственный интеллект", SystemPassports.BooleanText(p.ArtificialIntelligence)),
-                new KeyValuePair<string, string>("Используемые средства защиты", Empty(p.Protection))
+                new KeyValuePair<string, string>("Искусственный интеллект", SystemPassports.BooleanText(p.ArtificialIntelligence))
             };
         }
 
         private static string PassportSheet(Assessment a)
         {
-            SystemPassport p = a.Passport;
+            SystemPassport p = SystemPassports.Snapshot(a.Passport);
             StringBuilder rows = new StringBuilder();
-            List<string> merges = new List<string> { "A1:D1", "A2:D2", "A3:D3" };
-            rows.Append(Row(1, T("A1", "ПАСПОРТ ОБЪЕКТА", 1), 30));
-            rows.Append(Row(2, T("A2", SystemPassports.Description(p), 0), 80));
-            rows.Append(Row(3, T("A3", "Паспорт отражает введённые сведения и не определяет оценки зрелости, категорию или класс защищённости. Неуточнённая характеристика не означает отсутствие технологии.", 5), 50));
-            int row = 5;
+            List<string> merges = new List<string> { "A1:D1", "A2:D2" };
+            rows.Append(Row(1, T("A1", "ОПИСАНИЕ ОБЪЕКТА", 1), 30));
+            rows.Append(Row(2, T("A2", "Сведения введены оценщиком и не определяют оценки зрелости, класс или категорию. Неуточнённая характеристика не означает отсутствия технологии.", 5), 40));
+            int row = 4;
             AppendPassportRow(rows, merges, ref row, "Организация", Empty(a.Organization));
-            AppendPassportRow(rows, merges, ref row, "Система / объект оценки", Empty(a.SystemName));
-            AppendPassportRow(rows, merges, ref row, "Основа конфигурации", SystemPassports.TemplateName(p));
-            foreach (KeyValuePair<string, string> fact in PassportFacts(p))
-                AppendPassportRow(rows, merges, ref row, fact.Key, fact.Value);
+            AppendPassportRow(rows, merges, ref row, "Объект оценки", Empty(a.SystemName));
+            foreach (ProtectionObject o in a.Objects) AppendPassportRow(rows, merges, ref row, "Тип объекта защиты", ObjectCatalog.Text(o));
+            Action<string, string[]> table = (title, head) => { row++; rows.Append(Row(row, T("A" + row, title, 4), 26)); merges.Add("A" + row + ":D" + row); row++; rows.Append(Row(row, HeaderCells(head, row), 30)); row++; };
+            table("СОСТАВ", new[] { "Компонент", "Количество", "Примечание", "" });
+            foreach (PassportComponent c in p.Components) { rows.Append(Row(row, T("A" + row, c.Kind, 0) + N("B" + row, c.Count, 3) + T("C" + row, c.Note, 0), 32)); merges.Add("C" + row + ":D" + row); row++; }
+            table("ВНЕШНИЕ ВЗАИМОДЕЙСТВИЯ", new[] { "Система / сеть", "Способ", "Канал", "Примечание" });
+            if (p.NoConnections) { rows.Append(Row(row, T("A" + row, "Внешних взаимодействий нет", 0), 26)); row++; }
+            foreach (PassportConnection c in p.Connections) { rows.Append(Row(row, T("A" + row, c.System, 0) + T("B" + row, SystemPassports.Label(SystemPassports.Methods, c.Method), 0) + T("C" + row, SystemPassports.Label(SystemPassports.Channels, c.Channel), 0) + T("D" + row, c.Note, 0), 32)); row++; }
+            table("СРЕДСТВА ЗАЩИТЫ ИНФОРМАЦИИ", new[] { "Класс", "Средство", "Примечание", "" });
+            foreach (PassportTool t in p.Tools) { rows.Append(Row(row, T("A" + row, SystemPassports.Label(SystemPassports.ToolClasses, t.Class), 0) + T("B" + row, t.Product, 0) + T("C" + row, t.Note, 0), 32)); merges.Add("C" + row + ":D" + row); row++; }
             row++;
-            rows.Append(Row(row, T("A" + row, "СОСТАВ ОБОРУДОВАНИЯ", 4), 26));
-            merges.Add("A" + row + ":D" + row); row++;
-            rows.Append(Row(row, HeaderCells(new string[] { "Компонент", "Количество", "Назначение", "" }, row), 30));
-            merges.Add("C" + row + ":D" + row); row++;
-            foreach (SystemComponent component in SystemPassports.Components(p))
-            {
-                rows.Append(Row(row, T("A" + row, component.Name, 0) + N("B" + row, component.Count, 3) + T("C" + row, component.Purpose, 0), 42));
-                merges.Add("C" + row + ":D" + row); row++;
-            }
-            row++;
-            AppendPassportRow(rows, merges, ref row, "Текстовая схема подключения", SystemPassports.Topology(p), 90);
+            foreach (KeyValuePair<string, string> fact in PassportFacts(p)) AppendPassportRow(rows, merges, ref row, fact.Key, fact.Value);
             string[] unknown = SystemPassports.UnknownFields(p);
-            AppendPassportRow(rows, merges, ref row, "Неуточнённые характеристики", unknown.Length == 0 ? "Все характеристики паспорта уточнены." : String.Join("\n", unknown), unknown.Length == 0 ? 42 : Math.Min(300, 28 + unknown.Length * 18));
-            if (!String.IsNullOrWhiteSpace(p.Notes)) AppendPassportRow(rows, merges, ref row, "Примечания к объекту", p.Notes, 90);
+            AppendPassportRow(rows, merges, ref row, "Не уточнено", unknown.Length == 0 ? "Все характеристики уточнены." : String.Join("\n", unknown), unknown.Length == 0 ? 32 : Math.Min(300, 28 + unknown.Length * 18));
+            if (!String.IsNullOrWhiteSpace(p.Notes)) AppendPassportRow(rows, merges, ref row, "Особенности объекта", p.Notes, 90);
             StringBuilder mergeXml = new StringBuilder("<mergeCells count=\"" + merges.Count + "\">");
             foreach (string range in merges) mergeXml.Append("<mergeCell ref=\"" + range + "\"/>");
             mergeXml.Append("</mergeCells>");
-            return Sheet(rows, "A1:D" + (row - 1), "<col min=\"1\" max=\"1\" width=\"38\" customWidth=\"1\"/><col min=\"2\" max=\"2\" width=\"14\" customWidth=\"1\"/><col min=\"3\" max=\"3\" width=\"40\" customWidth=\"1\"/><col min=\"4\" max=\"4\" width=\"28\" customWidth=\"1\"/>", 3, "", mergeXml.ToString(), false);
+            return Sheet(rows, "A1:D" + (row - 1), "<col min=\"1\" max=\"1\" width=\"38\" customWidth=\"1\"/><col min=\"2\" max=\"2\" width=\"24\" customWidth=\"1\"/><col min=\"3\" max=\"3\" width=\"30\" customWidth=\"1\"/><col min=\"4\" max=\"4\" width=\"30\" customWidth=\"1\"/>", 2, "", mergeXml.ToString(), false);
         }
 
         private static void AppendPassportRow(StringBuilder rows, List<string> merges, ref int row, string label, string value, int height = 42)
@@ -484,22 +481,22 @@ namespace MaturityApp
         {
             b.Append(PageBreak());
             b.Append(P("Приложение А. Профиль видов требований", "Heading1"));
-            b.Append(P("Средняя оценка рассчитана только по заполненным ответам включённых направлений. Пропуски не входят в среднее; выбранный 0 входит. Эти средние не являются показателем зрелости Узи. Покрытие показывает долю направлений с ответом по критерию. Известные дефициты учитывают выбранные оценки ниже требуемого минимума; пропуски показаны отдельно.", "Small"));
+            b.Append(P("Средняя оценка рассчитана только по заполненным ответам включённых направлений. Пропуски не входят в среднее; выбранный 0 входит. Эти средние не являются показателем зрелости Узи. Покрытие показывает долю направлений с ответом по виду требования. Известные дефициты учитывают выбранные оценки ниже требуемого минимума; пропуски показаны отдельно.", "Small"));
             b.Append(TableStart(new int[] { 400, 3200, 1100, 1300, 1300, 2000 }));
-            b.Append(TableRow(new string[] { "№", "Критерий", "Средняя оценка", "Ответы / включено", "Покрытие, %", "Известные дефициты" }, true));
+            b.Append(TableRow(new string[] { "№", "Вид требования", "Средняя оценка", "Ответы / включено", "Покрытие, %", "Известные дефициты" }, true));
             foreach (CriterionProfile c in analysis.Criteria)
                 b.Append(TableRow(new string[] { (c.CriterionIndex + 1).ToString(Inv), c.Name, NullableNumber(c.Average), c.Answered + " / " + c.Included, (c.Coverage * 100).ToString("0.##", Inv), c.KnownDeficits.ToString(Inv) }, false));
             b.Append("</w:tbl>");
             if (!analysis.HasScope) b.Append(P("Нет включённых направлений. Для расчёта профиля включите направления и заполните ответы.", "Warning"));
 
             b.Append(P("Приложение Б. Общие дефициты по направлениям", "Heading1"));
-            b.Append(P("Одинаковые требования сгруппированы по критерию, типу действия и требуемой оценке. Число направлений помогает выбрать общие мероприятия. Номера соответствуют сводной таблице; результат и подтверждающие материалы проверяются по каждому направлению.", "Small"));
+            b.Append(P("Одинаковые требования сгруппированы по виду требования, типу действия и требуемой оценке. Число направлений помогает выбрать общие мероприятия. Номера соответствуют сводной таблице; результат и подтверждающие материалы проверяются по каждому направлению.", "Small"));
             b.Append(P(Analysis.PriorityExplanation, "Small"));
             if (analysis.GroupedActions.Length == 0) b.Append(P("Общих мероприятий по введённым данным нет.", null));
             else
             {
                 b.Append(TableStart(new int[] { 450, 2200, 1300, 800, 1500, 3050 }));
-                b.Append(TableRow(new string[] { "Приоритет", "Критерий", "Тип / требуется", "Направлений", "№ направлений", "Полное условие и мероприятие" }, true));
+                b.Append(TableRow(new string[] { "Приоритет", "Вид требования", "Тип / требуется", "Направлений", "№ направлений", "Полное условие и мероприятие" }, true));
                 foreach (GroupedAction g in analysis.GroupedActions)
                     b.Append(TableRow(new string[] { g.Priority.ToString(Inv), g.CriterionName, ActionLabel(g.Type) + "\n" + NullableNumber(g.Required), g.DirectionCount.ToString(Inv), DirectionNumbers(g.DirectionIds), ConditionAndAction(g.ConditionText, g.Action) + (g.BlockingTarget ? "" : "\nНе влияет на минимум цели.") }, false));
                 b.Append("</w:tbl>");
@@ -511,7 +508,7 @@ namespace MaturityApp
             StringBuilder rows = new StringBuilder();
             rows.Append(Row(1, T("A1", "ПРОФИЛЬ ВОСЬМИ КРИТЕРИЕВ", 1), 30));
             rows.Append(Row(2, T("A2", "Средние рассчитаны только по заполненным ответам включённых направлений и не являются показателем зрелости Узи. Пропуски не входят в среднее; выбранный 0 входит. Покрытие = ответы / включённые направления. Известные дефициты — выбранные оценки ниже требуемого минимума; пропуски показаны отдельно.", 5), 58));
-            rows.Append(Row(4, HeaderCells(new string[] { "№", "Критерий", "Вес", "Средняя оценка", "Средняя взвешенная", "Ответов", "Включено", "Пропусков", "Нулевых ответов", "Покрытие, %", "Известные дефициты" }, 4), 42));
+            rows.Append(Row(4, HeaderCells(new string[] { "№", "Вид требования", "Вес", "Средняя оценка", "Средняя взвешенная", "Ответов", "Включено", "Пропусков", "Нулевых ответов", "Покрытие, %", "Известные дефициты" }, 4), 42));
             int row = 5;
             foreach (CriterionProfile c in analysis.Criteria)
             {
@@ -521,16 +518,16 @@ namespace MaturityApp
             return Sheet(rows, "A1:K" + (row - 1), "<col min=\"1\" max=\"1\" width=\"8\" customWidth=\"1\"/><col min=\"2\" max=\"2\" width=\"42\" customWidth=\"1\"/><col min=\"3\" max=\"3\" width=\"10\" customWidth=\"1\"/><col min=\"4\" max=\"5\" width=\"17\" customWidth=\"1\"/><col min=\"6\" max=\"11\" width=\"14\" customWidth=\"1\"/>", 4, "A4:K" + (row - 1), TwoTitleMerges("K"), true);
         }
 
-        private static string DeficitPlanSheet(AssessmentAnalysis analysis, string responsible, string deadline)
+        private static string DeficitPlanSheet(AssessmentAnalysis analysis, Assessment a)
         {
             StringBuilder rows = new StringBuilder();
             rows.Append(Row(1, T("A1", "ПЛАН ДОСТИЖЕНИЯ ЦЕЛЕВЫХ УРОВНЕЙ", 1), 30));
-            rows.Append(Row(2, T("A2", "«Оценить» — проверить фактическое состояние и выбрать подтверждённый ответ. «Улучшить» — выполнить условие и подтвердить результат. Пропуск при нулевом минимуме не требует выставлять 0. Строки «Порог P» — контроль суммы, а не отдельные работы сверх критериев: сумма обязательных минимумов текущей таблицы 3 равна порогу P. Ответственный и срок — из данных для отчёта (п. 35 н Методики).", 5), 65));
-            rows.Append(Row(4, HeaderCells(new string[] { "№ направления", "Направление", "Критерий", "Сейчас", "Требуется", "Тип действия", "Влияет на цель", "Полное условие", "Мероприятие", "Исполнитель", "Срок" }, 4), 42));
+            rows.Append(Row(2, T("A2", "«Оценить» — проверить фактическое состояние и выбрать подтверждённый ответ. «Улучшить» — выполнить условие и подтвердить результат. Пропуск при нулевом минимуме не требует выставлять 0. Строки «Сумма баллов» — контроль суммы, а не отдельные работы сверх видов требований: сумма обязательных минимумов текущей таблицы 3 равна порогу P. Ответственный и срок — из данных для отчёта (п. 35 н Методики).", 5), 65));
+            rows.Append(Row(4, HeaderCells(new string[] { "№ направления", "Направление", "Вид требования", "Сейчас", "Требуется", "Тип действия", "Влияет на цель", "Полное условие", "Мероприятие", "Исполнитель", "Срок" }, 4), 42));
             int row = 5;
             foreach (DeficitRecord d in analysis.Deficits)
             {
-                rows.Append(Row(row, N("A" + row, d.DirectionId, 3) + T("B" + row, d.DirectionName, 0) + T("C" + row, d.CriterionName, 0) + OptionalNumber("D" + row, d.Current) + OptionalNumber("E" + row, d.Required) + T("F" + row, ActionLabel(d.Type), d.Type == "assess" ? 7 : 0) + T("G" + row, d.BlockingTarget ? "Да" : "Нет", 0) + T("H" + row, d.ConditionText ?? "", 0) + T("I" + row, d.Action ?? "", 0) + T("J" + row, responsible ?? "", 0) + T("K" + row, deadline ?? "", 0), 120));
+                rows.Append(Row(row, N("A" + row, d.DirectionId, 3) + T("B" + row, d.DirectionName, 0) + T("C" + row, d.CriterionName, 0) + OptionalNumber("D" + row, d.Current) + OptionalNumber("E" + row, d.Required) + T("F" + row, ActionLabel(d.Type), d.Type == "assess" ? 7 : 0) + T("G" + row, d.BlockingTarget ? "Да" : "Нет", 0) + T("H" + row, d.ConditionText ?? "", 0) + T("I" + row, d.Action ?? "", 0) + T("J" + row, ReportFacts.PlanFor(a, d.Key).Responsible, 0) + T("K" + row, ReportFacts.PlanFor(a, d.Key).Deadline, 0), 120));
                 row++;
             }
             if (row == 5)
@@ -545,8 +542,8 @@ namespace MaturityApp
         {
             StringBuilder rows = new StringBuilder();
             rows.Append(Row(1, T("A1", "ОБЩИЕ ДЕФИЦИТЫ ПО НАПРАВЛЕНИЯМ", 1), 30));
-            rows.Append(Row(2, T("A2", "Одинаковые требования сгруппированы по критерию, типу действия и требуемой оценке. Номера направлений соответствуют листу «Сводка». Результат подтверждается по каждому направлению. " + Analysis.PriorityExplanation, 5), 80));
-            rows.Append(Row(4, HeaderCells(new string[] { "Приоритет", "Критерий", "Тип действия", "Требуется", "Направлений", "№ направлений", "Влияет на цель", "Полное условие и мероприятие", "Исполнитель", "Срок" }, 4), 42));
+            rows.Append(Row(2, T("A2", "Одинаковые требования сгруппированы по виду требования, типу действия и требуемой оценке. Номера направлений соответствуют листу «Сводка». Результат подтверждается по каждому направлению. " + Analysis.PriorityExplanation, 5), 80));
+            rows.Append(Row(4, HeaderCells(new string[] { "Приоритет", "Вид требования", "Тип действия", "Требуется", "Направлений", "№ направлений", "Влияет на цель", "Полное условие и мероприятие", "Исполнитель", "Срок" }, 4), 42));
             int row = 5;
             foreach (GroupedAction g in analysis.GroupedActions)
             {
@@ -561,7 +558,7 @@ namespace MaturityApp
         {
             if (type == "assess") return "Оценить";
             if (type == "improve") return "Улучшить";
-            if (type == "score") return "Порог P";
+            if (type == "score") return "Сумма баллов";
             return type ?? "";
         }
         private static string NullableNumber(double? value) { return value.HasValue ? value.Value.ToString("0.###", Inv) : "—"; }
@@ -695,7 +692,7 @@ namespace MaturityApp
         private static string AnswersSheet(Assessment a)
         {
             StringBuilder rows = new StringBuilder();
-            rows.Append(Row(1, HeaderCells(new string[] { "№ направления", "Направление", "Участие", "№ критерия", "Критерий", "Вес", "Баллы", "Выбранный ответ", "Доказательства и комментарии" }, 1), 36));
+            rows.Append(Row(1, HeaderCells(new string[] { "№ направления", "Направление", "Участие", "№ вида требования", "Вид требования", "Вес", "Баллы", "Выбранный ответ", "Доказательства и комментарии" }, 1), 36));
             int row = 2;
             for (int i = 0; i < Data.DirectionNames.Length; i++)
             {

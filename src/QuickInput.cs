@@ -18,7 +18,7 @@ namespace MaturityApp
     public static class QuickInput
     {
         public static readonly string[] HeaderNames = {
-            "Документы", "Выполнение", "Инструменты", "Квалификация",
+            "Документирование", "Выполнение", "Инструменты", "Квалификация",
             "Контроль", "Обучение", "Внешний аудит", "Актуализация"
         };
         static readonly string[][] Labels = {
@@ -38,7 +38,7 @@ namespace MaturityApp
             AnswerOption[] options = Data.Criteria[criterion].Options;
             for (int index = 0; index < options.Length; index++)
                 if (Math.Abs(options[index].Value - value) < 1e-10) return Labels[criterion][index];
-            throw new ArgumentOutOfRangeException("value", "Недопустимая оценка для выбранного критерия.");
+            throw new ArgumentOutOfRangeException("value", "Недопустимая оценка для выбранного вида требования.");
         }
 
         public static List<AnswerChange> CopyIntoEmpty(Assessment a, int sourceId)
@@ -72,7 +72,7 @@ namespace MaturityApp
             ValidateStructure(a);
             int[] criteria = criterion == -1 ? Enumerable.Range(0, Data.Criteria.Length).ToArray() : new[] { criterion };
             foreach (int selected in criteria)
-                if (!Allowed(selected, value)) throw new ArgumentOutOfRangeException("value", "Оценка недопустима для одного из выбранных критериев.");
+                if (!Allowed(selected, value)) throw new ArgumentOutOfRangeException("value", "Оценка недопустима для одного из выбранных видов требований.");
 
             // Enumerate and validate the entire scope before constructing/applying
             // any mutation, including a lazily supplied sequence that may fail.
@@ -143,7 +143,7 @@ namespace MaturityApp
         {
             if (criterion < 0 || criterion >= Data.Criteria.Length) throw new ArgumentOutOfRangeException("criterion");
             ValidateStructure(a);
-            if (!Allowed(criterion, value)) throw new ArgumentOutOfRangeException("value", "Оценка недопустима для выбранного критерия.");
+            if (!Allowed(criterion, value)) throw new ArgumentOutOfRangeException("value", "Оценка недопустима для выбранного вида требования.");
             double? common = CommonValue(a, criterion);
             List<AnswerChange> changes = new List<AnswerChange>();
             foreach (DirectionAssessment d in a.Directions.Where(x => x.Included).OrderBy(x => x.Id))
@@ -183,9 +183,9 @@ namespace MaturityApp
             foreach (DirectionAssessment direction in a.Directions)
             {
                 if (direction == null || direction.Id < 1 || direction.Id > 21 || !ids.Add(direction.Id)) throw new InvalidDataException("Некорректные номера направлений.");
-                if (direction.Answers == null || direction.Answers.Length != Data.Criteria.Length) throw new InvalidDataException("В направлении должно быть восемь критериев.");
+                if (direction.Answers == null || direction.Answers.Length != Data.Criteria.Length) throw new InvalidDataException("В направлении должно быть восемь видов требований.");
                 for (int criterion = 0; criterion < Data.Criteria.Length; criterion++)
-                    if (!Allowed(criterion, direction.Answers[criterion])) throw new InvalidDataException("Недопустимая оценка критерия.");
+                    if (!Allowed(criterion, direction.Answers[criterion])) throw new InvalidDataException("Недопустимая оценка вида требования.");
             }
         }
     }
@@ -205,6 +205,7 @@ namespace MaturityApp
         // Optional parts added in 1.6. Null means "not part of this template".
         public SystemPassport Passport;
         public string[] Requirements, SourceData, Methods, Instruments;
+        public ProtectionObject[] Objects; // types and classes of the protected object (part of grades and goals)
     }
 
     [Flags]
@@ -224,7 +225,8 @@ namespace MaturityApp
             AnswerTemplate t = new AnswerTemplate {
                 Format = TemplateFormat, Name = name ?? "", Category = a.Category,
                 Author = Environment.UserName ?? "", Created = DateTime.Now.ToString("yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture),
-                Directions = a.Directions.Select(d => new TemplateDirection { Id = d.Id, Included = d.Included, Target = d.Target, Answers = (double?[])d.Answers.Clone() }).ToArray()
+                Directions = a.Directions.Select(d => new TemplateDirection { Id = d.Id, Included = d.Included, Target = d.Target, Answers = (double?[])d.Answers.Clone() }).ToArray(),
+                Objects = a.Objects.Select(o => new ProtectionObject { Kind = o.Kind, Level = o.Level }).ToArray() // names and acts belong to the object, not the template
             };
             if ((parts & TemplateParts.Passport) != 0 && a.Passport != null) t.Passport = SystemPassports.Snapshot(a.Passport);
             if ((parts & TemplateParts.Practice) != 0)
@@ -245,7 +247,7 @@ namespace MaturityApp
         public static string PartsText(TemplateParts parts)
         {
             List<string> names = new List<string>();
-            if ((parts & TemplateParts.Passport) != 0) names.Add("паспорт");
+            if ((parts & TemplateParts.Passport) != 0) names.Add("описание объекта");
             if ((parts & TemplateParts.Grades) != 0) names.Add("оценки и область");
             if ((parts & TemplateParts.Practice) != 0) names.Add("требования, исходные данные, методы");
             return String.Join(", ", names);
@@ -261,11 +263,13 @@ namespace MaturityApp
             check.Passport = t.Passport == null ? null : SystemPassports.Snapshot(t.Passport);
             check.Requirements = t.Requirements ?? new string[0]; check.SourceData = t.SourceData ?? new string[0];
             check.Methods = t.Methods ?? new string[0]; check.Instruments = t.Instruments ?? new string[0];
+            check.Objects = t.Objects ?? new ProtectionObject[0];
             Store.Validate(check);
             parts &= PartsOf(t);
             if ((parts & TemplateParts.Grades) != 0)
             {
                 a.Category = check.Category;
+                if (t.Objects != null) a.Objects = check.Objects;
                 foreach (DirectionAssessment source in check.Directions)
                 {
                     DirectionAssessment d = a.Directions.First(x => x.Id == source.Id);

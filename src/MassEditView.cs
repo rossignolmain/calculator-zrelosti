@@ -19,12 +19,12 @@ namespace MaturityApp
         UIElement BuildMassValuePanel()
         {
             StackPanel panel = new StackPanel();
-            panel.Children.Add(Theme.Text("Выберите критерий и нажмите значение — оно будет применено сразу. Массовое действие можно отменить.", 11, Theme.Muted));
+            panel.Children.Add(Theme.Text("Выберите вид требования и нажмите значение — оно будет применено сразу. Массовое действие можно отменить.", 11, Theme.Muted));
             Grid choices = new Grid { Margin = new Thickness(0, 9, 0, 9) };
             choices.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(260) }); choices.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); choices.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             massCriterionBox = new ComboBox { Height = 32, FontSize = 12, Padding = new Thickness(6), Margin = new Thickness(0, 0, 12, 0) };
             for (int j = 0; j < Data.Criteria.Length; j++) massCriterionBox.Items.Add(new ComboBoxItem { Content = Data.Criteria[j].Name, Tag = j });
-            massCriterionBox.Items.Add(new ComboBoxItem { Content = "Все восемь критериев", Tag = -1 });
+            massCriterionBox.Items.Add(new ComboBoxItem { Content = "Все восемь видов требований", Tag = -1 });
             massCriterionBox.SelectedIndex = massCriterion < 0 ? 8 : massCriterion;
             massCriterionBox.SelectionChanged += (s, e) => { ComboBoxItem item = massCriterionBox.SelectedItem as ComboBoxItem; if (item == null) return; massCriterion = (int)item.Tag; RefreshMassButtons(); }; choices.Children.Add(massCriterionBox);
             ComboBox scope = new ComboBox { Height = 32, FontSize = 12, Padding = new Thickness(6), Margin = new Thickness(0, 0, 12, 0) };
@@ -65,8 +65,8 @@ namespace MaturityApp
                 button.Visibility = allowed ? Visibility.Visible : Visibility.Collapsed;
                 if (!allowed) continue;
                 List<AnswerChange> preview = QuickInput.PreviewSetValue(assessment, massCriterion, value, massOverwrite, ids);
-                button.Content = Calc.F(value) + "  ·  " + preview.Count + " яч."; button.IsEnabled = preview.Count > 0;
-                string details = massCriterion < 0 ? "Одно значение для всех восьми критериев. Проверьте, что оно соответствует условиям каждого критерия." : Data.Criteria[massCriterion].Options.First(o => Math.Abs(o.Value - value) < 1e-9).Text;
+                button.Content = Calc.F(value) + "  ·  " + preview.Count + " ячеек"; button.IsEnabled = preview.Count > 0;
+                string details = massCriterion < 0 ? "Одно значение для всех восьми видов требований. Проверьте, что оно соответствует условиям каждого вида требования." : Data.Criteria[massCriterion].Options.First(o => Math.Abs(o.Value - value) < 1e-9).Text;
                 button.ToolTip = new TextBlock { Text = "Установить " + Calc.F(value) + ". Изменится ячеек: " + preview.Count + ".\n" + details, TextWrapping = TextWrapping.Wrap, MaxWidth = 450 };
             }
             massScopeText.Text = "Направлений в области действия: " + ids.Length + ". " + (massOverwrite ? "Замена заполненных включена." : "Только пустые: уже введённые оценки, включая 0, сохраняются.");
@@ -76,7 +76,7 @@ namespace MaturityApp
             List<AnswerChange> changes = QuickInput.SetValue(assessment, massCriterion, value, massOverwrite, MassDirectionIds());
             if (changes.Count == 0) { status.Text = "Нет ячеек для изменения. Проверьте область действия и режим замены."; return; }
             copiedAnswers = changes; Changed(); UpdateNumbers();
-            status.Text = "Установлено " + Calc.F(value) + ": " + changes.Count + " яч. · " + (massCriterion < 0 ? "все восемь критериев" : Data.Criteria[massCriterion].Name) + ". Действие можно отменить.";
+            status.Text = "Установлено " + Calc.F(value) + ": " + changes.Count + " ячеек · " + (massCriterion < 0 ? "все восемь видов требований" : Data.Criteria[massCriterion].Name) + ". Действие можно отменить.";
         }
     }
 }

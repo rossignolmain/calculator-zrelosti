@@ -37,12 +37,12 @@ namespace MaturityApp
                     ZipArchiveEntry project = null;
                     foreach (ZipArchiveEntry entry in archive.Entries)
                     {
-                        if (!String.Equals(entry.FullName, "01 Проект.uzi.json", StringComparison.Ordinal)) continue;
-                        if (project != null) throw new InvalidDataException("В комплекте найдено несколько файлов «01 Проект.uzi.json».");
+                        if (!String.Equals(entry.FullName, "01 Оценка.uzi.json", StringComparison.Ordinal) && !String.Equals(entry.FullName, "01 Проект.uzi.json", StringComparison.Ordinal)) continue;
+                        if (project != null) throw new InvalidDataException("В архиве найдено несколько файлов оценки.");
                         project = entry;
                     }
-                    if (project == null) throw new InvalidDataException("В комплекте отсутствует файл «01 Проект.uzi.json».");
-                    if (project.Length < 0 || project.Length > maximumProjectBytes) throw new InvalidDataException("Проект внутри комплекта превышает допустимый размер 4 МБ.");
+                    if (project == null) throw new InvalidDataException("В архиве нет файла оценки «01 Оценка.uzi.json».");
+                    if (project.Length < 0 || project.Length > maximumProjectBytes) throw new InvalidDataException("Файл оценки внутри архива превышает допустимый размер 4 МБ.");
                     using (Stream input = project.Open())
                     using (MemoryStream data = new MemoryStream())
                     {
@@ -52,10 +52,10 @@ namespace MaturityApp
                         while ((read = input.Read(buffer, 0, Math.Min(buffer.Length, maximumProjectBytes - total + 1))) > 0)
                         {
                             total += read;
-                            if (total > maximumProjectBytes) throw new InvalidDataException("Проект внутри комплекта превышает допустимый размер 4 МБ.");
+                            if (total > maximumProjectBytes) throw new InvalidDataException("Файл оценки внутри архива превышает допустимый размер 4 МБ.");
                             data.Write(buffer, 0, read);
                         }
-                        if (total != project.Length) throw new InvalidDataException("Размер проекта внутри комплекта не соответствует данным архива.");
+                        if (total != project.Length) throw new InvalidDataException("Размер файла оценки внутри архива не соответствует данным архива.");
                         string json = new UTF8Encoding(false, true).GetString(data.ToArray());
                         if (json.Length > 0 && json[0] == '\uFEFF') json = json.Substring(1);
                         return Store.Parse(json);
@@ -63,7 +63,7 @@ namespace MaturityApp
                 }
             }
             catch (InvalidDataException) { throw; }
-            catch (Exception ex) { throw new InvalidDataException("Не удалось открыть комплект: архив или содержащийся в нём проект повреждён.", ex); }
+            catch (Exception ex) { throw new InvalidDataException("Не удалось открыть архив: он или файл оценки в нём повреждён.", ex); }
         }
 
         public static string[] Preflight(Assessment a)
@@ -84,7 +84,7 @@ namespace MaturityApp
                 if (d.Included)
                 {
                     int missing = d.Answers.Count(x => !x.HasValue);
-                    if (missing > 0) messages.Add(label + ": не заполнено " + missing + " из 8 критериев.");
+                    if (missing > 0) messages.Add(label + ": не заполнено " + missing + " из 8 видов требований.");
                 }
                 else if (String.IsNullOrWhiteSpace(d.Evidence))
                     messages.Add(label + ": не указано основание исключения (поле подтверждающих материалов).");
@@ -169,15 +169,15 @@ namespace MaturityApp
         {
             Assessment snapshot = Snapshot(a);
             Summary summary = Calc.Summary(snapshot);
-            if (summary.Count == 0) throw new InvalidDataException("Область оценки пуста. Для комплекта включите хотя бы одно направление.");
+            if (summary.Count == 0) throw new InvalidDataException("Область оценки пуста. Для архива включите хотя бы одно направление.");
             string full = Path.GetFullPath(path), parent = Path.GetDirectoryName(full);
             Directory.CreateDirectory(parent);
             string scratch = Path.Combine(parent, ".maturity-bundle-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(scratch);
-            string project = Path.Combine(scratch, "01 Проект.uzi.json");
+            string project = Path.Combine(scratch, "01 Оценка.uzi.json");
             string word = Path.Combine(scratch, "02 Отчёт.docx");
             string excel = Path.Combine(scratch, "03 Таблица.xlsx");
-            string manifest = Path.Combine(scratch, "Состав комплекта.txt");
+            string manifest = Path.Combine(scratch, "Состав архива.txt");
             string pending = Path.Combine(scratch, "bundle.tmp.zip");
             try
             {
@@ -225,20 +225,20 @@ namespace MaturityApp
             text.AppendLine("Должность оценщика: " + Value(a.AssessorPosition));
             text.AppendLine("Утверждающий: " + Value(a.ApproverName));
             text.AppendLine("Должность утверждающего: " + Value(a.ApproverPosition));
-            text.AppendLine("Категория системы: " + (a.Category == 0 ? "не определена" : a.Category.ToString(CultureInfo.InvariantCulture)));
-            text.AppendLine("Заполнение критериев: " + (summary.Complete ? "полное" : "ПРЕДВАРИТЕЛЬНЫЙ РЕЗУЛЬТАТ; есть незаполненные ответы"));
+            text.AppendLine("Минимальный целевой уровень: " + (a.Category == 0 ? "не определена" : a.Category.ToString(CultureInfo.InvariantCulture)));
+            text.AppendLine("Заполнение видов требований: " + (summary.Complete ? "полное" : "ПРЕДВАРИТЕЛЬНЫЙ РЕЗУЛЬТАТ; есть незаполненные ответы"));
             text.AppendLine("Включено направлений: " + summary.Count + "; ответов: " + summary.Answered + " из " + summary.Total + ".");
             text.AppendLine("Показатель Узи: " + Calc.F(summary.Average, "0.00") + " — " + Calc.LevelName((int)Math.Floor(summary.Average)));
             text.AppendLine("Версия методики: " + Data.MethodDate);
             text.AppendLine("Источник: " + Data.SourceUrl);
-            text.AppendLine(); text.AppendLine("СОСТАВ КОМПЛЕКТА");
+            text.AppendLine(); text.AppendLine("СОСТАВ АРХИВА");
             foreach (string file in files) text.AppendLine("- " + file);
-            text.AppendLine("- Состав комплекта.txt");
+            text.AppendLine("- Состав архива.txt");
             text.AppendLine(); text.AppendLine("ПРОВЕРКА ЗАПОЛНЕНИЯ ПЕРЕД ВЫГРУЗКОЙ");
             string[] messages = CollectPreflight(a);
-            if (messages.Length == 0) text.AppendLine("Пропусков в основных реквизитах и критериях не обнаружено.");
+            if (messages.Length == 0) text.AppendLine("Пропусков в основных реквизитах и вида требованиях не обнаружено.");
             else foreach (string message in messages) text.AppendLine("- " + message);
-            text.AppendLine(); text.AppendLine("JSON содержит редактируемый проект. Word и Excel сформированы из того же снимка данных. Данные не передавались в интернет.");
+            text.AppendLine(); text.AppendLine("Файл оценки можно открыть в программе и продолжить работу. Word и Excel сформированы из тех же данных. Данные не передавались в интернет.");
             return text.ToString();
         }
 

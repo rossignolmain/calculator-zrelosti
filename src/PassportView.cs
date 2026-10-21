@@ -1,151 +1,253 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
-using System.Diagnostics;
-using System.IO;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
-using Microsoft.Win32;
+using System.Windows.Media;
 
 namespace MaturityApp
 {
+    // "Объект оценки": who is assessed and what the object consists of. Every list grows
+    // with "+ Добавить", so any system — one workstation, a hospital network or an ICS — fits.
     public partial class MainWindow
     {
-        readonly string armTemplatePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Данные", "Типовой АРМ.arm.json");
-        TextBlock passportDescription, passportTopology, passportUnknown;
-        ComboBox passportChannelChoice, passportInternetChoice;
-        TextBlock passportReference;
-        Button passportReferenceLink;
+        TextBlock passportSummary, passportUnknown, objectTargetText;
+        StackPanel objectRows, componentRows, connectionRows, toolRows;
+        CheckBox noConnectionsBox;
+        SystemPassport passportDraft;
 
-        void NewArmProject()
+        // The passport is created on the first edit, so opening the page never invents facts.
+        SystemPassport Passport { get { return assessment.Passport ?? (passportDraft ?? (passportDraft = SystemPassports.CreateEmpty())); } }
+        void PassportChanged()
         {
-            if (!PreserveCurrent()) return;
-            SystemPassport basis = SystemPassports.CreateSingleArm();
-            string notice = "Создан новый АРМ: введите организацию и уточните отличия от типового состава.";
-            if (live && File.Exists(armTemplatePath))
-            {
-                try { basis = SystemPassports.LoadTemplate(armTemplatePath); notice = "Применён ваш типовой состав. Реквизиты организации и оценки нужно указать для нового объекта."; }
-                catch (Exception ex) { notice = "Создана стандартная основа. Сохранённый типовой состав не прочитан: " + ex.Message; }
-            }
-            saveTimer.Stop(); assessment = Assessment.Create(); SystemPassports.Apply(assessment, basis);
-            assessment.SystemName = ArmObjectName(basis.ExternalSystem);
-            projectPath = bundlePath = null; copiedAnswers = null; dirty = true; autoOk = false; selected = 0;
-            quickSearch = ""; onlyIncomplete = false; massCriterion = 0; massOverwrite = massVisibleOnly = false;
-            page = "object"; ShowPage(); AutoSave(); status.Text = notice;
-        }
-
-        static string ArmObjectName(string external)
-        {
-            return String.IsNullOrWhiteSpace(external) ? "АРМ доступа к внешней информационной системе" : "АРМ доступа к «" + external.Trim() + "»";
-        }
-
-        void ApplySingleArmBasis()
-        {
-            SystemPassports.Apply(assessment, SystemPassports.CreateSingleArm());
-            if (String.IsNullOrWhiteSpace(assessment.SystemName)) assessment.SystemName = ArmObjectName("");
-            Changed(); ShowPage(); status.Text = "Добавлена основа: 1 АРМ, 1 роутер, без коммутатора и сервера. Уточните состав; оценки и область расчёта сохранены.";
-        }
-
-        void ApplyArmTemplate(SystemPassport loaded)
-        {
-            string oldExternal = assessment.Passport == null ? "" : assessment.Passport.ExternalSystem;
-            bool generated = String.IsNullOrWhiteSpace(assessment.SystemName) || assessment.SystemName == ArmObjectName(oldExternal);
-            SystemPassports.Apply(assessment, loaded);
-            if (generated) assessment.SystemName = ArmObjectName(assessment.Passport == null ? "" : assessment.Passport.ExternalSystem);
+            if (building) return;
+            if (assessment.Passport == null) { assessment.Passport = Passport; passportDraft = null; }
+            Changed(); RefreshPassportPreview();
         }
 
         void BuildPassport()
         {
+            passportDraft = null;
             StackPanel body = PageStack();
-            TextBlock lead = Theme.Text("Один АРМ для доступа к внешней системе", 23, null, true); lead.Margin = new Thickness(0, 0, 0, 8); body.Children.Add(lead);
-            TextBlock help = Theme.Text("Технический состав можно повторять в разных организациях. Ответы о зрелости, цели и применимость направлений проверяются для каждого объекта отдельно.", 12, Theme.Muted); help.Margin = new Thickness(0, 0, 0, 16); body.Children.Add(help);
-            if (assessment.Passport == null)
-            {
-                StackPanel start = new StackPanel(); start.Children.Add(Theme.Text("Добавьте типовую основу к этой оценке: 1 компьютер и 1 обычный роутер; коммутатор и сервер по умолчанию отсутствуют. Остальные характеристики предстоит уточнить.", 14));
-                Button apply = Theme.Button("Применить основу «Один АРМ»", ApplySingleArmBasis, true); apply.HorizontalAlignment = HorizontalAlignment.Left; apply.Margin = new Thickness(0, 14, 0, 0); start.Children.Add(apply); body.Children.Add(Theme.Card(start)); return;
-            }
-            SystemPassport p = assessment.Passport;
+            TextBlock help = Theme.Text("Опишите, что оценивается. Все списки можно дополнять; незаполненное отмечается как «не уточнено». Описание не выставляет оценки зрелости.", 12, Theme.Muted); help.Margin = new Thickness(0, 0, 0, 14); body.Children.Add(help);
+
             StackPanel identity = new StackPanel();
             Grid names = PassportGrid(2);
-            PassportText(names, 0, "Организация", assessment.Organization, value => { assessment.Organization = value; PassportChanged(); });
-            PassportExternalSystem(names, 1, p.ExternalSystem, value => {
-                string oldGenerated = ArmObjectName(p.ExternalSystem); bool generated = String.IsNullOrWhiteSpace(assessment.SystemName) || assessment.SystemName == oldGenerated;
-                p.ExternalSystem = value; if (generated) assessment.SystemName = ArmObjectName(value); PassportChanged();
-            }); identity.Children.Add(names);
-            TextBlock title = Theme.Text("Состав оборудования · исправьте только отличия", 14, null, true); title.Margin = new Thickness(0, 15, 0, 9); identity.Children.Add(title);
-            Grid counts = PassportGrid(4);
-            PassportNumber(counts, 0, "Компьютеры / АРМ", p.Workstations, 1, value => p.Workstations = value);
-            PassportNumber(counts, 1, "Роутеры", p.Routers, 0, value => p.Routers = value);
-            PassportNumber(counts, 2, "Коммутаторы", p.Switches, 0, value => p.Switches = value);
-            PassportNumber(counts, 3, "Серверы", p.Servers, 0, value => p.Servers = value);
-            identity.Children.Add(counts); body.Children.Add(Theme.Card(identity, new Thickness(16)));
+            PassportText(names, 0, "Организация (оператор)", assessment.Organization, value => { assessment.Organization = value; Changed(); UpdateHeader(); });
+            PassportText(names, 1, "Объект оценки — наименование системы или области оценки", assessment.SystemName, value => { assessment.SystemName = value; Changed(); UpdateHeader(); });
+            identity.Children.Add(names);
+            identity.Children.Add(SectionTitle("Тип объекта защиты", "Класс, уровень защищённости или категория задают рекомендуемый минимальный целевой уровень (п. 11 Методики) и основания требований."));
+            objectRows = new StackPanel(); identity.Children.Add(objectRows); RebuildObjectRows();
+            objectTargetText = Theme.Text("", 12, Theme.Blue, true); objectTargetText.Margin = new Thickness(0, 6, 0, 0); identity.Children.Add(objectTargetText);
+            identity.Children.Add(AddRowButton("+ Добавить тип объекта", () => { assessment.Objects = assessment.Objects.Concat(new[] { new ProtectionObject { Kind = "gis" } }).ToArray(); ObjectsChanged(); RebuildObjectRows(); }));
+            body.Children.Add(Theme.Card(identity, new Thickness(16)));
 
-            StackPanel connection = new StackPanel { Margin = new Thickness(0, 14, 0, 14) };
-            Grid links = PassportGrid(2);
-            PassportChoice(links, 0, "Способ работы с внешней ИС", new[] { "Не уточнялось", "Через браузер", "Отдельная программа / клиент" }, new[] { "unknown", "browser", "client" }, p.Connection, value => { p.Connection = value; PassportChanged(); });
-            passportChannelChoice = PassportChoice(links, 1, "Канал подключения", new[] { "Не уточнялось", "Интернет", "VPN / защищённый канал", "Изолированный / выделенный канал" }, new[] { "unknown", "internet", "vpn", "isolated" }, p.Channel, value => { p.Channel = value; if (value == "internet") p.Internet = true; SyncPassportInternet(); PassportChanged(); }); connection.Children.Add(links);
-            Grid protection = PassportGrid(1); protection.Margin = new Thickness(0, 12, 0, 0);
-            PassportText(protection, 0, "Средства защиты: названия антивируса, VPN-клиента, других СЗИ", p.Protection, value => { p.Protection = value; PassportChanged(); }); connection.Children.Add(protection); body.Children.Add(Theme.Card(connection, new Thickness(16)));
-            body.Children.Add(BuildProtectionComposer(p));
-            StackPanel reference = new StackPanel { Margin = new Thickness(0, 8, 0, 0) }; passportReference = Theme.Text("", 12); reference.Children.Add(passportReference);
-            passportReferenceLink = Theme.Button("Открыть официальный источник", () => { string url = ConnectionCatalog.Find(p.ExternalSystem).Url; if (url.Length > 0) try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); } catch (Exception ex) { ShowError("Не удалось открыть источник", ex); } }); passportReferenceLink.HorizontalAlignment = HorizontalAlignment.Left; passportReferenceLink.Margin = new Thickness(0, 10, 0, 0); reference.Children.Add(passportReferenceLink);
-            body.Children.Add(new Expander { Header = "Справка о вариантах подключения · источник и дата проверки", Content = Theme.Card(reference, new Thickness(16)), Margin = new Thickness(0, 0, 0, 14) });
+            StackPanel composition = new StackPanel();
+            composition.Children.Add(SectionTitle("Состав объекта", "Рабочие места, серверы, сетевое и иное оборудование. Название можно выбрать из подсказок или ввести своё."));
+            componentRows = new StackPanel(); composition.Children.Add(componentRows); RebuildComponentRows();
+            composition.Children.Add(AddRowButton("+ Добавить компонент", () => { Passport.Components = Passport.Components.Concat(new[] { new PassportComponent() }).ToArray(); PassportChanged(); RebuildComponentRows(); }));
+            body.Children.Add(Card(composition));
 
-            StackPanel extra = new StackPanel { Margin = new Thickness(0, 9, 0, 0) };
-            TextBlock extraHelp = Theme.Text("Одна кнопка ниже указывает отсутствие домена, Wi-Fi, мобильных устройств, удалённого администрирования, собственной разработки ПО и ИИ. Сама она не исключает направления: для этого на вкладке «Оценка» появится кнопка «Исключить по паспорту».", 12, Theme.Muted); extra.Children.Add(extraHelp);
-            List<ComboBox> technologyChoices = new List<ComboBox>();
-            Button simple = Theme.Button("Эти шесть технологий не используются", () => {
-                p.Domain = p.Wireless = p.Mobile = p.RemoteAdministration = p.OwnDevelopment = p.ArtificialIntelligence = false;
-                bool previousBuilding = building; building = true; foreach (ComboBox item in technologyChoices) item.SelectedIndex = 1; building = previousBuilding; PassportChanged();
-            }); simple.HorizontalAlignment = HorizontalAlignment.Left; simple.Margin = new Thickness(0, 10, 0, 10); extra.Children.Add(simple);
-            Grid technologies = PassportGrid(3); int techRow = 0;
-            technologyChoices.Add(PassportBoolean(technologies, techRow++, "Домен", p.Domain, value => p.Domain = value));
-            technologyChoices.Add(PassportBoolean(technologies, techRow++, "Wi-Fi / беспроводной доступ", p.Wireless, value => p.Wireless = value));
-            technologyChoices.Add(PassportBoolean(technologies, techRow++, "Мобильные устройства", p.Mobile, value => p.Mobile = value));
-            technologyChoices.Add(PassportBoolean(technologies, techRow++, "Удалённое администрирование АРМ", p.RemoteAdministration, value => p.RemoteAdministration = value));
-            technologyChoices.Add(PassportBoolean(technologies, techRow++, "Собственная разработка ПО", p.OwnDevelopment, value => p.OwnDevelopment = value));
-            technologyChoices.Add(PassportBoolean(technologies, techRow++, "Использование ИИ", p.ArtificialIntelligence, value => p.ArtificialIntelligence = value));
-            passportInternetChoice = PassportBoolean(technologies, techRow++, "Выход в интернет", p.Internet, value => p.Internet = value);
-            SyncPassportInternet();
-            extra.Children.Add(technologies);
-            Grid notes = PassportGrid(1); notes.Margin = new Thickness(0, 11, 0, 0); PassportText(notes, 0, "Особенности объекта / примечание к составу", p.Notes, value => { p.Notes = value; PassportChanged(); }); extra.Children.Add(notes);
-            body.Children.Add(new Expander { Header = "Дополнительные технологии и особенности · уточнить одним действием", Content = Theme.Card(extra, new Thickness(16)), Margin = new Thickness(0, 0, 0, 14) });
+            StackPanel connections = new StackPanel();
+            connections.Children.Add(SectionTitle("Внешние взаимодействия", "Другие системы и сети, с которыми взаимодействует объект: внешние ИС, сети операторов, корпоративная сеть."));
+            noConnectionsBox = new CheckBox { Content = "Внешних взаимодействий нет", IsChecked = Passport.NoConnections, Margin = new Thickness(0, 0, 0, 8) };
+            noConnectionsBox.Checked += (s, e) => { if (building) return; if (Passport.Connections.Length > 0 && MessageBox.Show(this, "Убрать указанные взаимодействия (" + Passport.Connections.Length + ")?", "Внешние взаимодействия", MessageBoxButton.OKCancel) != MessageBoxResult.OK) { noConnectionsBox.IsChecked = false; return; } Passport.Connections = new PassportConnection[0]; Passport.NoConnections = true; PassportChanged(); RebuildConnectionRows(); };
+            noConnectionsBox.Unchecked += (s, e) => { if (building) return; Passport.NoConnections = false; PassportChanged(); RebuildConnectionRows(); };
+            connections.Children.Add(noConnectionsBox);
+            connectionRows = new StackPanel(); connections.Children.Add(connectionRows); RebuildConnectionRows();
+            connections.Children.Add(AddRowButton("+ Добавить взаимодействие", () => { Passport.NoConnections = false; Passport.Connections = Passport.Connections.Concat(new[] { new PassportConnection() }).ToArray(); building = true; noConnectionsBox.IsChecked = false; building = false; PassportChanged(); RebuildConnectionRows(); }));
+            body.Children.Add(Card(connections));
 
-            StackPanel preview = new StackPanel(); preview.Children.Add(Theme.Text("Автоматически из этих же данных", 16, null, true));
-            passportDescription = Theme.Text("", 13); passportDescription.Margin = new Thickness(0, 10, 0, 10); preview.Children.Add(passportDescription);
-            passportTopology = Theme.Text("", 14, Theme.Blue, true); passportTopology.Margin = new Thickness(0, 0, 0, 10); preview.Children.Add(passportTopology);
-            passportUnknown = Theme.Text("", 11, Theme.Muted); preview.Children.Add(passportUnknown); body.Children.Add(Theme.Card(preview, new Thickness(16)));
+            StackPanel tools = new StackPanel();
+            tools.Children.Add(SectionTitle("Средства защиты информации", "Фактически применяемые средства. Класс выбирается из списка, название — из подсказок или вводится вручную."));
+            toolRows = new StackPanel(); tools.Children.Add(toolRows); RebuildToolRows();
+            tools.Children.Add(AddRowButton("+ Добавить средство защиты", () => { Passport.Tools = Passport.Tools.Concat(new[] { new PassportTool { Class = "crypto" } }).ToArray(); PassportChanged(); RebuildToolRows(); }));
+            body.Children.Add(Card(tools));
 
-            WrapPanel commands = new WrapPanel { Margin = new Thickness(0, 15, 0, 8) };
-            commands.Children.Add(Theme.Button("Перейти к оценке", () => { page = "quick"; ShowPage(); }, true));
-            commands.Children.Add(Theme.Button("Запомнить основу для новых АРМ", RememberArmTemplate));
-            commands.Children.Add(Theme.Button("Загрузить основу…", LoadArmTemplate));
-            commands.Children.Add(Theme.Button("Сохранить основу как…", SaveArmTemplateAs)); body.Children.Add(commands);
-            TextBlock repeated = Theme.Text("Запоминается только технический состав. Следующий «Новый АРМ» получит эту основу; организация, ФИО, подтверждающие материалы и оценки будут пустыми. Паспорт, состав и схема входят в Word и Excel автоматически.", 11, Theme.Muted); repeated.Margin = new Thickness(0, 0, 0, 20); body.Children.Add(repeated);
-            RefreshPassportPreview();
+            StackPanel technology = new StackPanel();
+            technology.Children.Add(SectionTitle("Применяемые технологии", "Ответ «Нет» позволяет исключить неприменимые направления оценки (п. 13 Методики) кнопкой на вкладке «Анкета»."));
+            List<ComboBox> choices = new List<ComboBox>();
+            Grid flags = PassportGrid(3); int index = 0;
+            choices.Add(PassportBoolean(flags, index++, "Беспроводной доступ (Wi-Fi)", Passport.Wireless, v => Passport.Wireless = v));
+            choices.Add(PassportBoolean(flags, index++, "Мобильные устройства", Passport.Mobile, v => Passport.Mobile = v));
+            choices.Add(PassportBoolean(flags, index++, "Удалённый доступ (администрирование, подрядчики, работники)", Passport.RemoteAdministration, v => Passport.RemoteAdministration = v));
+            choices.Add(PassportBoolean(flags, index++, "Собственная разработка ПО", Passport.OwnDevelopment, v => Passport.OwnDevelopment = v));
+            choices.Add(PassportBoolean(flags, index++, "Искусственный интеллект", Passport.ArtificialIntelligence, v => Passport.ArtificialIntelligence = v));
+            choices.Add(PassportBoolean(flags, index++, "Доменная инфраструктура", Passport.Domain, v => Passport.Domain = v));
+            PassportBoolean(flags, index++, "Доступ в интернет", Passport.Internet, v => Passport.Internet = v);
+            technology.Children.Add(flags);
+            Button none = AddRowButton("Отметить первые пять как неприменяемые", () => {
+                Passport.Wireless = Passport.Mobile = Passport.RemoteAdministration = Passport.OwnDevelopment = Passport.ArtificialIntelligence = false;
+                building = true; foreach (ComboBox c in choices.Take(5)) c.SelectedIndex = 1; building = false; PassportChanged();
+            });
+            none.ToolTip = "Wi-Fi, мобильные устройства, удалённый доступ, собственная разработка и ИИ — «Нет». Домен и интернет не меняются.";
+            technology.Children.Add(none);
+            Grid notes = PassportGrid(1); notes.Margin = new Thickness(0, 10, 0, 0);
+            PassportText(notes, 0, "Особенности объекта (сегменты, площадки, иное) — необязательно", Passport.Notes, value => { Passport.Notes = value; PassportChanged(); });
+            technology.Children.Add(notes);
+            body.Children.Add(Card(technology));
+
+            StackPanel preview = new StackPanel();
+            preview.Children.Add(Theme.Text("Итог описания", 15, null, true));
+            passportSummary = Theme.Text("", 12); passportSummary.Margin = new Thickness(0, 8, 0, 6); preview.Children.Add(passportSummary);
+            passportUnknown = Theme.Text("", 11, Theme.Muted); preview.Children.Add(passportUnknown);
+            body.Children.Add(Card(preview));
+            Button next = Theme.Button("Перейти к анкете →", () => { page = "quick"; ShowPage(); }, true); next.HorizontalAlignment = HorizontalAlignment.Left; next.Margin = new Thickness(0, 14, 0, 24); body.Children.Add(next);
+            RefreshPassportPreview(); RefreshObjectTarget();
         }
 
-        void PassportChanged()
+        static Border Card(UIElement content) { Border b = Theme.Card(content, new Thickness(16)); b.Margin = new Thickness(0, 14, 0, 0); return b; }
+        static StackPanel SectionTitle(string title, string hint)
         {
-            if (building) return; Changed(); UpdateHeader(); RefreshPassportPreview();
+            StackPanel p = new StackPanel { Margin = new Thickness(0, 14, 0, 8) };
+            p.Children.Add(Theme.Text(title, 15, null, true));
+            TextBlock h = Theme.Text(hint, 11, Theme.Muted); h.Margin = new Thickness(0, 3, 0, 0); p.Children.Add(h); return p;
         }
-        void SyncPassportInternet()
+        static Button AddRowButton(string text, Action action)
         {
-            if (passportInternetChoice == null || assessment.Passport == null) return;
-            SystemPassport p = assessment.Passport; bool prior = building; building = true;
-            passportInternetChoice.SelectedIndex = !p.Internet.HasValue ? 0 : p.Internet.Value ? 2 : 1;
-            passportInternetChoice.IsEnabled = p.Channel != "internet";
-            passportInternetChoice.ToolTip = p.Channel == "internet" ? "Доступ в интернет следует из выбранного канала. Чтобы изменить это свойство, сначала выберите другой канал подключения." : null;
-            building = prior;
+            Button b = Theme.Button(text, action); b.HorizontalAlignment = HorizontalAlignment.Left; b.Padding = new Thickness(10, 5, 10, 5); b.FontSize = 12; b.Margin = new Thickness(0, 6, 0, 0); b.Foreground = Theme.Blue; return b;
         }
+        static Grid RowGrid(params double[] stars)
+        {
+            Grid g = new Grid { Margin = new Thickness(0, 0, 0, 6) };
+            foreach (double s in stars) g.ColumnDefinitions.Add(new ColumnDefinition { Width = s > 0 ? new GridLength(s, GridUnitType.Star) : new GridLength(-s) });
+            return g;
+        }
+        static void Put(Grid g, UIElement e, int column) { if (e is FrameworkElement) ((FrameworkElement)e).Margin = new Thickness(0, 0, 6, 0); Grid.SetColumn(e, column); g.Children.Add(e); }
+        TextBox RowText(string value, string hint, Action<string> set)
+        {
+            TextBox box = new TextBox { Text = value, Height = 30, Padding = new Thickness(6, 4, 6, 4), ToolTip = hint, Tag = hint };
+            box.TextChanged += (s, e) => { if (!building) { set(box.Text); PassportChanged(); } }; return box;
+        }
+        ComboBox RowEditable(string value, string[] suggestions, string hint, Action<string> set)
+        {
+            ComboBox c = new ComboBox { IsEditable = true, IsTextSearchEnabled = false, Text = value, Height = 30, ToolTip = hint, Tag = hint };
+            foreach (string s in suggestions) c.Items.Add(s);
+            DependencyPropertyDescriptor.FromProperty(ComboBox.TextProperty, typeof(ComboBox)).AddValueChanged(c, (s, e) => { if (!building) { set(c.Text ?? ""); PassportChanged(); } });
+            return c;
+        }
+        ComboBox RowChoice(CatalogItem[] items, string value, Action<string> set)
+        {
+            ComboBox c = new ComboBox { Height = 30 };
+            foreach (CatalogItem item in items) c.Items.Add(new ComboBoxItem { Content = item.Text, Tag = item.Key });
+            c.SelectedIndex = Math.Max(0, Array.FindIndex(items, x => x.Key == (value ?? "")));
+            c.SelectionChanged += (s, e) => { if (!building && c.SelectedItem != null) { set((string)((ComboBoxItem)c.SelectedItem).Tag); PassportChanged(); } }; return c;
+        }
+        Button RemoveButton(Action remove)
+        {
+            Button b = new Button { Content = "✕", Width = 28, Height = 28, Background = Brushes.Transparent, Foreground = Theme.Muted, ToolTip = "Удалить строку" };
+            b.Click += (s, e) => remove(); return b;
+        }
+
+        void RebuildObjectRows()
+        {
+            if (objectRows == null) return; objectRows.Children.Clear();
+            if (assessment.Objects.Length == 0) { objectRows.Children.Add(Theme.Text("Не указан. Добавьте тип: ГИС, ИСПДн, значимый объект КИИ, АСУ ТП или иную систему. Если типов несколько, цель определяется по самому строгому.", 11, Theme.Muted)); return; }
+            foreach (ProtectionObject item in assessment.Objects)
+            {
+                ProtectionObject o = item; Grid row = RowGrid(2.2, 1.2, 1.6, 1.6, -30);
+                ComboBox kind = new ComboBox { Height = 30, Tag = "Тип объекта защиты" };
+                foreach (ObjectKind k in ObjectCatalog.Kinds) kind.Items.Add(new ComboBoxItem { Content = k.Text, Tag = k.Key });
+                kind.SelectedIndex = Array.FindIndex(ObjectCatalog.Kinds, k => k.Key == o.Kind);
+                ComboBox level = new ComboBox { Height = 30, Tag = "Класс или категория" };
+                Action fillLevels = () => {
+                    level.Items.Clear(); ObjectKind k = ObjectCatalog.Find(o.Kind);
+                    level.Items.Add(k.Levels.Length == 0 ? "—" : k.LevelLabel + ": не установлен");
+                    foreach (string l in k.Levels) level.Items.Add(l);
+                    level.IsEnabled = k.Levels.Length > 0; level.SelectedIndex = Math.Min(o.Level, k.Levels.Length);
+                };
+                building = true; fillLevels(); building = false;
+                kind.SelectionChanged += (s, e) => { if (building || kind.SelectedItem == null) return; o.Kind = (string)((ComboBoxItem)kind.SelectedItem).Tag; o.Level = 0; building = true; fillLevels(); building = false; ObjectsChanged(); };
+                level.SelectionChanged += (s, e) => { if (building || level.SelectedIndex < 0) return; o.Level = level.SelectedIndex; ObjectsChanged(); };
+                Put(row, kind, 0); Put(row, level, 1);
+                TextBox name = new TextBox { Text = o.Name, Height = 30, Padding = new Thickness(6, 4, 6, 4), ToolTip = "Наименование (если систем несколько)" }; name.TextChanged += (s, e) => { o.Name = name.Text; Changed(); }; Put(row, name, 2);
+                TextBox doc = new TextBox { Text = o.Document, Height = 30, Padding = new Thickness(6, 4, 6, 4), ToolTip = "Акт классификации / категорирования: номер и дата" }; doc.TextChanged += (s, e) => { o.Document = doc.Text; Changed(); }; Put(row, doc, 3);
+                Put(row, RemoveButton(() => { assessment.Objects = assessment.Objects.Where(x => !Object.ReferenceEquals(x, o)).ToArray(); ObjectsChanged(); RebuildObjectRows(); }), 4);
+                objectRows.Children.Add(row);
+            }
+            objectRows.Children.Insert(0, HeaderRow(RowGrid(2.2, 1.2, 1.6, 1.6, -30), "Тип", "Класс / категория", "Наименование (необязательно)", "Акт классификации / категорирования"));
+        }
+        static Grid HeaderRow(Grid g, params string[] titles)
+        {
+            for (int i = 0; i < titles.Length; i++) { TextBlock t = Theme.Text(titles[i], 11, Theme.Muted); Grid.SetColumn(t, i); g.Children.Add(t); }
+            g.Margin = new Thickness(0, 0, 0, 3); return g;
+        }
+        void ObjectsChanged()
+        {
+            ObjectCatalog.ApplyToAssessment(assessment);
+            if (assessment.Objects.Length == 0 && assessment.Category == 0) assessment.Category = 1;
+            Changed(); RefreshObjectTarget();
+        }
+        void RefreshObjectTarget()
+        {
+            if (objectTargetText == null) return;
+            objectTargetText.Text = assessment.Objects.Length == 0 ? "" : assessment.Category == 0
+                ? "Класс или категория не установлены — минимальный целевой уровень 1."
+                : "Рекомендуемый минимальный целевой уровень по самому строгому типу: " + assessment.Category + ". Цель отдельных направлений можно повысить на вкладке «Анкета».";
+        }
+
+        void RebuildComponentRows()
+        {
+            if (componentRows == null) return; componentRows.Children.Clear();
+            if (Passport.Components.Length == 0) { componentRows.Children.Add(Theme.Text("Пока пусто.", 11, Theme.Muted)); return; }
+            componentRows.Children.Add(HeaderRow(RowGrid(2.4, -90, 3, -30), "Компонент", "Количество", "Примечание (назначение, ОС, размещение)"));
+            foreach (PassportComponent item in Passport.Components)
+            {
+                PassportComponent c = item; Grid row = RowGrid(2.4, -90, 3, -30);
+                Put(row, RowEditable(c.Kind, SystemPassports.ComponentSuggestions, "Компонент", v => c.Kind = v), 0);
+                TextBox count = new TextBox { Text = c.Count.ToString(), Height = 30, Padding = new Thickness(6, 4, 6, 4), Tag = "Количество" };
+                count.TextChanged += (s, e) => { int n; bool ok = Int32.TryParse(count.Text, out n) && n >= 0 && n <= 100000; count.BorderBrush = ok ? Theme.Line : Theme.B("#C44850"); if (ok && !building) { c.Count = n; PassportChanged(); } };
+                Put(row, count, 1);
+                Put(row, RowText(c.Note, "Примечание", v => c.Note = v), 2);
+                Put(row, RemoveButton(() => { Passport.Components = Passport.Components.Where(x => !Object.ReferenceEquals(x, c)).ToArray(); PassportChanged(); RebuildComponentRows(); }), 3);
+                componentRows.Children.Add(row);
+            }
+        }
+        void RebuildConnectionRows()
+        {
+            if (connectionRows == null) return; connectionRows.Children.Clear();
+            if (Passport.NoConnections) return;
+            if (Passport.Connections.Length == 0) { connectionRows.Children.Add(Theme.Text("Не указаны. Добавьте взаимодействие или отметьте, что их нет.", 11, Theme.Muted)); return; }
+            connectionRows.Children.Add(HeaderRow(RowGrid(2.4, 1.6, 1.6, 2, -30), "Система или сеть", "Способ", "Канал", "Примечание"));
+            foreach (PassportConnection item in Passport.Connections)
+            {
+                PassportConnection c = item; Grid row = RowGrid(2.4, 1.6, 1.6, 2, -30);
+                Put(row, RowText(c.System, "Система или сеть", v => c.System = v), 0);
+                Put(row, RowChoice(SystemPassports.Methods, c.Method, v => c.Method = v), 1);
+                Put(row, RowChoice(SystemPassports.Channels, c.Channel, v => { c.Channel = v; if (v == "internet") Passport.Internet = true; }), 2);
+                Put(row, RowText(c.Note, "Примечание", v => c.Note = v), 3);
+                Put(row, RemoveButton(() => { Passport.Connections = Passport.Connections.Where(x => !Object.ReferenceEquals(x, c)).ToArray(); PassportChanged(); RebuildConnectionRows(); }), 4);
+                connectionRows.Children.Add(row);
+            }
+        }
+        void RebuildToolRows()
+        {
+            if (toolRows == null) return; toolRows.Children.Clear();
+            if (Passport.Tools.Length == 0) { toolRows.Children.Add(Theme.Text("Пока пусто.", 11, Theme.Muted)); return; }
+            toolRows.Children.Add(HeaderRow(RowGrid(1.8, 2.2, 2.4, -30), "Класс", "Средство", "Примечание (версия, сертификат, где установлено)"));
+            foreach (PassportTool item in Passport.Tools)
+            {
+                PassportTool t = item; Grid row = RowGrid(1.8, 2.2, 2.4, -30);
+                string[] products; SystemPassports.ProductSuggestions.TryGetValue(t.Class, out products);
+                ComboBox product = RowEditable(t.Product, products ?? new string[0], "Средство", v => t.Product = v);
+                Put(row, RowChoice(SystemPassports.ToolClasses, t.Class, v => {
+                    t.Class = v; string[] next; SystemPassports.ProductSuggestions.TryGetValue(v, out next);
+                    string text = product.Text; product.Items.Clear(); foreach (string s in next ?? new string[0]) product.Items.Add(s); product.Text = text;
+                }), 0);
+                Put(row, product, 1);
+                Put(row, RowText(t.Note, "Примечание", v => t.Note = v), 2);
+                Put(row, RemoveButton(() => { Passport.Tools = Passport.Tools.Where(x => !Object.ReferenceEquals(x, t)).ToArray(); PassportChanged(); RebuildToolRows(); }), 3);
+                toolRows.Children.Add(row);
+            }
+        }
+
         void RefreshPassportPreview()
         {
-            if (assessment.Passport == null || passportDescription == null) return;
-            passportDescription.Text = SystemPassports.Description(assessment.Passport); passportTopology.Text = SystemPassports.Topology(assessment.Passport);
-            string[] missing = SystemPassports.UnknownFields(assessment.Passport);
-            passportUnknown.Text = missing.Length == 0 ? "Все характеристики паспорта уточнены. Оценки зрелости заполняются отдельно." : "Не уточнено (" + missing.Length + "): " + String.Join("; ", missing) + ".";
-            if (passportReference != null) { ConnectionReference entry = ConnectionCatalog.Find(assessment.Passport.ExternalSystem); passportReference.Text = entry.Text + "\nПроверка открытых источников: " + ConnectionCatalog.CheckedDate + ". Справка не подставляет фактические оценки и установленное ПО."; passportReferenceLink.IsEnabled = entry.Url.Length > 0; }
+            if (passportSummary == null) return;
+            passportSummary.Text = SystemPassports.Description(Passport) + (assessment.Objects.Length > 0 ? "\nТип объекта: " + String.Join("; ", assessment.Objects.Select(ObjectCatalog.Text)) + "." : "");
+            string[] missing = SystemPassports.UnknownFields(Passport);
+            passportUnknown.Text = missing.Length == 0 ? "Все характеристики уточнены." : "Не уточнено (" + missing.Length + "): " + String.Join("; ", missing) + ".";
         }
         static Grid PassportGrid(int columns)
         {
@@ -160,71 +262,12 @@ namespace MaturityApp
             StackPanel panel = PassportField(grid, column, label); TextBox input = new TextBox { Text = value, Height = 34, MaxLength = 4000, Margin = new Thickness(0, 6, 0, 0), Padding = new Thickness(7, 4, 7, 4), Tag = label };
             input.TextChanged += (s, e) => { if (!building) changed(input.Text); }; panel.Children.Add(input);
         }
-        void PassportNumber(Grid grid, int column, string label, int value, int minimum, Action<int> changed)
-        {
-            StackPanel panel = PassportField(grid, column, label); TextBox input = new TextBox { Text = value.ToString(), Height = 32, MaxLength = 4, Margin = new Thickness(0, 6, 0, 0), Padding = new Thickness(7, 4, 7, 4), Tag = label };
-            input.TextChanged += (s, e) => { if (building) return; int parsed; bool valid = Int32.TryParse(input.Text, out parsed) && parsed >= minimum && parsed <= 9999; input.BorderBrush = valid ? Theme.Line : Theme.B("#C44850"); input.ToolTip = valid ? null : "Введите целое число от " + minimum + " до 9999. До исправления сохраняется последнее корректное значение."; if (valid) { changed(parsed); PassportChanged(); } }; panel.Children.Add(input);
-        }
-        ComboBox PassportChoice(Grid grid, int column, string label, string[] names, string[] values, string selectedValue, Action<string> changed)
-        {
-            StackPanel panel = PassportField(grid, column, label); ComboBox choice = new ComboBox { Height = 33, Margin = new Thickness(0, 6, 0, 0), Padding = new Thickness(6), Tag = label };
-            for (int i = 0; i < names.Length; i++) choice.Items.Add(new ComboBoxItem { Content = names[i], Tag = values[i] }); choice.SelectedIndex = Math.Max(0, Array.IndexOf(values, selectedValue));
-            choice.SelectionChanged += (s, e) => { if (!building && choice.SelectedItem != null) changed((string)((ComboBoxItem)choice.SelectedItem).Tag); }; panel.Children.Add(choice); return choice;
-        }
-        void PassportExternalSystem(Grid grid, int column, string value, Action<string> changed)
-        {
-            StackPanel panel = PassportField(grid, column, "К какой внешней системе подключаются");
-            ComboBox choice = new ComboBox { IsEditable = true, IsTextSearchEnabled = false, StaysOpenOnEdit = true, Text = value, Height = 34, Padding = new Thickness(6), Margin = new Thickness(0, 6, 0, 0), Tag = "К какой внешней системе подключаются" };
-            foreach (string system in new[] { "ППО АИСТ ГБД", "ФИС ФРДО", "АС СЭП", "ФИС ГИА", "Суперсервис «Поступление в вуз онлайн»", "ИС ЕПТ", "РМИАС", "ЕГИСЗ", "ТФОМС", "ФИС ГНА" }) choice.Items.Add(system);
-            DependencyPropertyDescriptor.FromProperty(ComboBox.TextProperty, typeof(ComboBox)).AddValueChanged(choice, (s, e) => { if (!building) changed(choice.Text ?? ""); });
-            choice.ToolTip = "Выберите частую систему или введите своё название. Выбор названия не утверждает наличие СЗИ и не выставляет оценки."; panel.Children.Add(choice);
-        }
-        UIElement BuildProtectionComposer(SystemPassport p)
-        {
-            StackPanel content = new StackPanel { Margin = new Thickness(0, 9, 0, 0) };
-            content.Children.Add(Theme.Text("Варианты из вашего примера подключения к АИСТ. Выберите фактически установленные компоненты. Название ИС само по себе не подтверждает требования оператора или наличие этих средств.", 12, Theme.Muted));
-            Grid choices = PassportGrid(4); choices.Margin = new Thickness(0, 12, 0, 12);
-            ComboBox vpn = ProtectionChoice(choices, 0, "Криптозащита / сеть", new[] { "Не уточнено", "ViPNet" });
-            ComboBox nsd = ProtectionChoice(choices, 1, "Защита от НСД", new[] { "Не уточнено", "Secret Net Studio 8", "Dallas Lock 8.0" });
-            ComboBox antivirus = ProtectionChoice(choices, 2, "Антивирус", new[] { "Не уточнено", "В составе Secret Net Studio", "Dr.Web", "Kaspersky" });
-            ComboBox boot = ProtectionChoice(choices, 3, "СДЗ", new[] { "Не уточнено", "ПАК «Соболь»", "СДЗ Dallas Lock", "ПК ViPNet SafeBoot" });
-            content.Children.Add(choices);
-            nsd.SelectionChanged += (s, e) => { ComboBoxItem builtIn = (ComboBoxItem)antivirus.Items[1]; builtIn.IsEnabled = nsd.SelectedIndex == 1; if (!builtIn.IsEnabled && antivirus.SelectedIndex == 1) antivirus.SelectedIndex = 0; }; ((ComboBoxItem)antivirus.Items[1]).IsEnabled = false;
-            Button apply = Theme.Button("Вставить выбранный набор в паспорт", () => {
-                string[] labels = { "Криптозащита / сеть", "Защита от НСД", "Антивирус", "СДЗ" }; ComboBox[] controls = { vpn, nsd, antivirus, boot };
-                p.Protection = String.Join("; ", controls.Select((control, i) => labels[i] + ": " + (control.SelectedIndex == 0 ? "не уточнено" : ((ComboBoxItem)control.SelectedItem).Content.ToString())));
-                Changed(); ShowPage(); status.Text = "Выбранный набор внесён в паспорт. Запомните основу, чтобы повторять этот состав для новых организаций.";
-            }); apply.HorizontalAlignment = HorizontalAlignment.Left; content.Children.Add(apply);
-            return new Expander { Header = "Выбрать СЗИ из списка · ViPNet, SNS, Dallas Lock, антивирус, СДЗ", Content = Theme.Card(content, new Thickness(16)), Margin = new Thickness(0, 0, 0, 14) };
-        }
-        static ComboBox ProtectionChoice(Grid grid, int column, string label, string[] values)
-        {
-            StackPanel panel = PassportField(grid, column, label); ComboBox choice = new ComboBox { Height = 33, Padding = new Thickness(6), Margin = new Thickness(0, 6, 0, 0), Tag = "СЗИ: " + label };
-            foreach (string value in values) choice.Items.Add(new ComboBoxItem { Content = value }); choice.SelectedIndex = 0; panel.Children.Add(choice); return choice;
-        }
         ComboBox PassportBoolean(Grid grid, int index, string label, bool? selectedValue, Action<bool?> changed)
         {
             int row = index / 3, column = index % 3; while (grid.RowDefinitions.Count <= row) grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             Grid field = PassportGrid(1); field.Margin = new Thickness(0, 0, 0, 10); Grid.SetRow(field, row); Grid.SetColumn(field, column); grid.Children.Add(field);
-            StackPanel panel = PassportField(field, 0, label); ComboBox choice = new ComboBox { Height = 32, Margin = new Thickness(0, 6, 0, 0), Padding = new Thickness(6), Tag = label }; choice.Items.Add("Не уточнялось"); choice.Items.Add("Нет"); choice.Items.Add("Да"); choice.SelectedIndex = !selectedValue.HasValue ? 0 : selectedValue.Value ? 2 : 1;
+            StackPanel panel = PassportField(field, 0, label); ComboBox choice = new ComboBox { Height = 32, Margin = new Thickness(0, 6, 0, 0), Padding = new Thickness(6), Tag = label }; choice.Items.Add("Не уточнено"); choice.Items.Add("Нет"); choice.Items.Add("Да"); choice.SelectedIndex = !selectedValue.HasValue ? 0 : selectedValue.Value ? 2 : 1;
             choice.SelectionChanged += (s, e) => { if (building) return; changed(choice.SelectedIndex == 0 ? (bool?)null : choice.SelectedIndex == 2); PassportChanged(); }; panel.Children.Add(choice); return choice;
-        }
-        void RememberArmTemplate()
-        {
-            try { SystemPassports.SaveTemplate(assessment.Passport, armTemplatePath); status.Text = "Основа запомнена. Кнопка «Новый АРМ» применит её к новой организации без переноса оценок и реквизитов."; }
-            catch (Exception ex) { ShowError("Не удалось запомнить основу", ex); }
-        }
-        void LoadArmTemplate()
-        {
-            OpenFileDialog dialog = new OpenFileDialog { Title = "Загрузить техническую основу АРМ", Filter = "Основа АРМ (*.arm.json)|*.arm.json|JSON (*.json)|*.json" }; if (dialog.ShowDialog(this) != true) return;
-            try { SystemPassport loaded = SystemPassports.LoadTemplate(dialog.FileName); ApplyArmTemplate(loaded); Changed(); ShowPage(); status.Text = "Загружен только технический состав. Организация, ответы, цели и область оценки сохранены."; }
-            catch (Exception ex) { ShowError("Не удалось загрузить основу", ex); }
-        }
-        void SaveArmTemplateAs()
-        {
-            SaveFileDialog dialog = new SaveFileDialog { Title = "Сохранить техническую основу", Filter = "Основа АРМ (*.arm.json)|*.arm.json", FileName = "Типовой АРМ.arm.json", AddExtension = true, DefaultExt = ".arm.json" }; if (dialog.ShowDialog(this) != true) return;
-            try { SystemPassports.SaveTemplate(assessment.Passport, dialog.FileName); status.Text = "Техническая основа сохранена: " + dialog.FileName; }
-            catch (Exception ex) { ShowError("Не удалось сохранить основу", ex); }
         }
     }
 }
