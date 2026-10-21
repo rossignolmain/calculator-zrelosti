@@ -14,6 +14,17 @@ namespace MaturityApp
     public partial class MainWindow
     {
         readonly List<QuickAnswerCell> commonCells = new List<QuickAnswerCell>();
+        // The common-answer row is hidden until asked for, so the table stays calm while answering.
+        bool commonExpanded;
+        Grid commonRowView;
+        Button commonToggle;
+
+        void ToggleCommonRow() { commonExpanded = !commonExpanded; ShowCommonRow(); }
+        void ShowCommonRow()
+        {
+            if (commonRowView != null) commonRowView.Visibility = commonExpanded ? Visibility.Visible : Visibility.Collapsed;
+            if (commonToggle != null) commonToggle.Content = commonExpanded ? "Скрыть общий ответ ▴" : "Общий ответ для всех направлений ▾";
+        }
 
         void BuildQuickAssessment()
         {
@@ -42,6 +53,7 @@ namespace MaturityApp
             top.Children.Add(Theme.Card(info, new Thickness(14, 11, 14, 12)));
             WrapPanel tools = new WrapPanel { Margin = new Thickness(0, 10, 0, 0) };
             Button library = Theme.Button("Шаблоны…", OpenLibrary); library.ToolTip = "Подставить шаблон в эту оценку или сохранить её как новый шаблон. Шаблонов может быть сколько угодно; папку можно сделать общей."; tools.Children.Add(library);
+            commonToggle = Theme.Button("", ToggleCommonRow); commonToggle.ToolTip = "Строка над таблицей: одно нажатие ставит значение во всех включённых направлениях, кроме тех, где ответ отличается. Действие можно отменить."; tools.Children.Add(commonToggle);
             int[] inapplicable = QuickInput.PassportInapplicable(assessment.Passport).Where(id => assessment.Directions[id - 1].Included).ToArray();
             if (inapplicable.Length > 0)
             {
@@ -104,7 +116,7 @@ namespace MaturityApp
                 commonCells.Add(cell); Grid.SetColumn(cell, j + 2); commonRow.Children.Add(cell);
             }
             Border commonLine = new Border { Height = 2, Background = Theme.B("#C9D8F2"), VerticalAlignment = VerticalAlignment.Bottom, IsHitTestVisible = false }; Grid.SetColumnSpan(commonLine, 12); commonRow.Children.Add(commonLine);
-            Grid.SetRow(commonRow, 1); table.Children.Add(commonRow);
+            Grid.SetRow(commonRow, 1); table.Children.Add(commonRow); commonRowView = commonRow; ShowCommonRow();
             StackPanel rows = new StackPanel(); ScrollViewer scroll = new ScrollViewer { Content = rows, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled }; Grid.SetRow(scroll, 2); table.Children.Add(scroll);
             foreach (DirectionAssessment d in assessment.Directions)
             {

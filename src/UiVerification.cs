@@ -371,7 +371,11 @@ namespace MaturityApp
         {
             Assessment a = Assessment.Create(); a.Directions[20].Included = false; MainWindow window = Create(a);
             Assert(Common(window).Count == 8, "The common row must have eight cells.");
-            Assert(Common(window).All(c => c.ActualHeight > 20) && Rows(window)[0].Cells[0].ActualHeight > 20, "The common row or the first direction row has no visible height.");
+            Assert(Common(window).All(c => !c.IsVisible && c.ActualHeight == 0), "The common row must be collapsed by default.");
+            Button toggle = Tree((DependencyObject)window.Content).OfType<Button>().Single(b => (b.Content as string ?? "").StartsWith("Общий ответ для всех направлений"));
+            Click(toggle); Layout(window);
+            Assert(Common(window).All(c => c.ActualHeight > 20) && Rows(window)[0].Cells[0].ActualHeight > 20, "The expanded common row or the first direction row has no visible height.");
+            Assert((string)toggle.Content == "Скрыть общий ответ ▴", "The toggle does not offer to hide the expanded row.");
             for (int j = 0; j < 8; j++) Click(AnswerButton(Common(window)[j], j, .5));
             Assert(a.Directions.Take(20).All(d => d.Answers.All(x => x == .5)), "Eight common clicks did not fill every included cell.");
             Assert(a.Directions[20].Answers.All(x => !x.HasValue), "The common row touched an excluded direction.");
